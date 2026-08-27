@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pdfsim"
+version = "0.1.0"
+description = "PDFSim - PDF 双面打印前的页码编排与装订准备"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pikepdf>=8.0",
+    "PyMuPDF>=1.23.0",
+    "PySide6>=6.6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["src/tests"]
+addopts = "-ra"

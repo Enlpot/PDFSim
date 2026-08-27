@@ -1,0 +1,32 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+
+# ---- 测试/覆盖率 ----
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ---- 构建产物（不提交，避免仓库臃肿；本地 python build.py 生成）----
+build/
+dist/
+
+# ---- 本地临时验证产物 ----
+_verify/
+test_output.txt
+_verify_hole.pdf
+*.log
+
+# ---- 内部开发文档（提示语/审查报告，不公开）----
+AgentPrompt/
+
+# ---- 大体积性能测试样本（63MB，可运行 src/tests/samples/gen_samples.py 再生成）----
+src/tests/samples/sample_800pages.pdf
+
+# ---- 编辑器/系统 ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,5 @@
+pikepdf>=8.0
+PyMuPDF>=1.23.0
+PySide6>=6.6.0    # Stage 2 安装但暂不使用，Stage 3 才用
+pytest>=7.0
+pytest-cov>=4.0
