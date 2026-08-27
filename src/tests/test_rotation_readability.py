@@ -26,7 +26,7 @@ import pymupdf
 import pytest
 from PIL import Image
 
-from pdfsim.models import A3_HEIGHT_MM, A3_WIDTH_MM
+from pdfsim.models import A3_HEIGHT_MM, A3_WIDTH_MM, RotationOverride
 
 from _stage4_helpers import (
     Pipeline,
@@ -72,10 +72,16 @@ def arrow_is_horizontal(img: Image.Image) -> bool:
 
 class TestRotationReadability:
     def test_a4_landscape_rotated_readable(self, samples_dir, tmp_path):
-        """A4 横向页：输出旋转 90°→210×297 纵向，逆时针转书 90° 后正立可读。"""
+        """A4 横向页：输出旋转 90°→210×297 纵向，逆时针转书 90° 后正立可读。
+
+        样本文字本为水平正向（AUTO 检测=0），故显式强制旋转以验证
+        "旋转→输出→转书后可读" 链路（检测逻辑由 test_engine 专项覆盖）。
+        """
         src = copy_sample("sample_direction_markers.pdf", str(tmp_path))
         p = Pipeline(src, str(tmp_path))
         try:
+            p.result.pages[0].rotation_override = RotationOverride.CW90
+            p.rebuild()
             # 定位 A4 横向源页（idx0）的物理页（phys1）
             pp = p.plan.pages[0]
             assert pp.source_page_info.original_index == 0
@@ -93,10 +99,12 @@ class TestRotationReadability:
             p.close()
 
     def test_a3_portrait_rotated_readable(self, samples_dir, tmp_path):
-        """A3 纵向页：输出旋转 90°→420×297 横向，逆时针转书 90° 后正立可读。"""
+        """A3 纵向页：输出旋转 90°→420×297 横向，逆时针转书 90° 后正立可读（显式强制旋转）。"""
         src = copy_sample("sample_a3_portrait.pdf", str(tmp_path))
         p = Pipeline(src, str(tmp_path))
         try:
+            p.result.pages[1].rotation_override = RotationOverride.CW90
+            p.rebuild()
             a3 = [pp for pp in p.plan.pages
                   if not pp.is_blank and pp.source_page_info.original_index == 1]
             assert a3 and a3[0].rotation == 90

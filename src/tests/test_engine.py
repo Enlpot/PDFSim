@@ -250,41 +250,95 @@ def text_data(*dirs):
 
 class TestDetectTextRotation:
     def test_horizontal(self):
-        assert detect_text_rotation(text_data((1.0, 0.0))) == 90
+        # 主导文字朝右 → 不旋转
+        assert detect_text_rotation(text_data((1.0, 0.0))) == 0
 
     def test_vertical(self):
-        assert detect_text_rotation(text_data((0.0, -1.0))) == 90
+        # 文字向下 → 逆时针 90°；文字向上 → 顺时针 90°
+        assert detect_text_rotation(text_data((0.0, -1.0))) == 270
         assert detect_text_rotation(text_data((0.0, 1.0))) == 90
 
     def test_no_text(self):
         assert detect_text_rotation({"blocks": []}) == 90  # 回退默认
 
     def test_reversed_horizontal(self):
-        assert detect_text_rotation(text_data((-1.0, 0.0))) == 270
+        # 180° 倒置正文 → 旋转 180°
+        assert detect_text_rotation(text_data((-1.0, 0.0))) == 180
 
     def test_weighted_dominant(self):
-        # 大量水平 + 少量旋转 → 按文本量取主导
+        # 大量水平正向 + 少量向下 → 按文本量取主导 → 不旋转
         data = {
             "blocks": [
                 {"type": 0, "lines": [{"dir": (1.0, 0.0), "spans": [{"text": "a" * 100}]}]},
                 {"type": 0, "lines": [{"dir": (0.0, -1.0), "spans": [{"text": "b" * 5}]}]},
             ]
         }
+        assert detect_text_rotation(data) == 0
+
+    def test_weighted_dominant_vertical(self):
+        # 纵向向上占主导 → 顺时针 90°
+        data = {
+            "blocks": [
+                {"type": 0, "lines": [{"dir": (1.0, 0.0), "spans": [{"text": "a" * 5}]}]},
+                {"type": 0, "lines": [{"dir": (0.0, 1.0), "spans": [{"text": "b" * 80}]}]},
+            ]
+        }
         assert detect_text_rotation(data) == 90
+
+    def test_small_float_error_quantized(self):
+        # dir 存在微小浮点误差时按主分量量化，不误判
+        assert detect_text_rotation(text_data((1.0000001, 0.0000001))) == 0
+        assert detect_text_rotation(text_data((-1.0, 0.0001))) == 180
+
+    def test_ignore_non_text_blocks(self):
+        # 图片等非文字块忽略；仅文字块参与统计
+        data = {
+            "blocks": [
+                {"type": 1, "lines": [{"dir": (1.0, 0.0), "spans": [{"text": "x" * 50}]}]},
+                {"type": 0, "lines": [{"dir": (-1.0, 0.0), "spans": [{"text": "y" * 20}]}]},
+            ]
+        }
+        assert detect_text_rotation(data) == 180
 
 
 class TestPlanRotation:
-    def test_a4_landscape_needs_rotation(self):
+    def test_a4_landscape_text_horizontal_no_rotation(self):
+        # A4 横向但文字已水平正向可读 → 不旋转，尺寸不交换
         p = a4_landscape(0)
         r, size = plan_rotation(p, text_data((1.0, 0.0)))
+        assert r == 0
+        assert size == (A4_HEIGHT_MM, A4_WIDTH_MM)
+
+    def test_a4_landscape_text_up_rot90(self):
+        p = a4_landscape(0)
+        r, size = plan_rotation(p, text_data((0.0, 1.0)))
         assert r == 90
+        assert size == (A4_WIDTH_MM, A4_HEIGHT_MM)  # 90° 交换宽高
+
+    def test_a4_landscape_text_down_rot270(self):
+        p = a4_landscape(0)
+        r, size = plan_rotation(p, text_data((0.0, -1.0)))
+        assert r == 270
         assert size == (A4_WIDTH_MM, A4_HEIGHT_MM)
+
+    def test_a4_landscape_text_reversed_rot180(self):
+        # 180° 倒置：旋转 180°，尺寸不交换
+        p = a4_landscape(0)
+        r, size = plan_rotation(p, text_data((-1.0, 0.0)))
+        assert r == 180
+        assert size == (A4_HEIGHT_MM, A4_WIDTH_MM)
 
     def test_a3_portrait_needs_rotation(self):
         p = a3(0)
-        r, size = plan_rotation(p, text_data((1.0, 0.0)))
+        r, size = plan_rotation(p, text_data((0.0, 1.0)))
         assert r == 90
         assert size == (A3_HEIGHT_MM, A3_WIDTH_MM)
+
+    def test_a3_portrait_text_reversed_rot180(self):
+        p = a3(0)
+        r, size = plan_rotation(p, text_data((-1.0, 0.0)))
+        assert r == 180
+        assert size == (A3_WIDTH_MM, A3_HEIGHT_MM)  # 180° 不交换宽高
 
     def test_a4_portrait_no_rotation(self):
         p = a4(0)
@@ -325,6 +379,11 @@ class TestFinalRotation:
         p = a4_landscape(0, rot_override=RotationOverride.CCW90)
         p.detected_rotation = 90
         assert final_rotation(p) == 270
+
+    def test_rot180(self):
+        p = a4_landscape(0, rot_override=RotationOverride.ROT180)
+        p.detected_rotation = 90
+        assert final_rotation(p) == 180
 
     def test_none(self):
         p = a4_landscape(0, rot_override=RotationOverride.NONE)
@@ -511,10 +570,10 @@ class TestBuildProcessPlan:
         # 页码
         texts = [p.number_text for p in plan.pages]
         assert texts == ["1", "2", "3", "4"]
-        # 旋转页
+        # 旋转页（文字水平正向 → 新检测逻辑不再盲转 90°）
         rot_page = plan.pages[3]
-        assert rot_page.rotation == 90
-        assert rot_page.output_size_mm == (A4_WIDTH_MM, A4_HEIGHT_MM)
+        assert rot_page.rotation == 0
+        assert rot_page.output_size_mm == (A4_HEIGHT_MM, A4_WIDTH_MM)
         # 每页都有坐标
         for p in plan.pages:
             assert p.number_point is not None

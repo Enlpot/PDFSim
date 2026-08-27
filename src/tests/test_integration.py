@@ -14,6 +14,7 @@ from pdfsim.models import (
     BlankPageSource,
     DocumentConfig,
     PageMark,
+    RotationOverride,
     A4_WIDTH_MM,
     A4_HEIGHT_MM,
     A3_WIDTH_MM,
@@ -94,9 +95,16 @@ class TestE2E:
             p.close()
 
     def test_a3_portrait_rotation(self, samples_dir, tmp_path):
-        """A3 纵向页端到端旋转 90。"""
+        """A3 纵向页端到端旋转 90（样本文字水平 → 显式强制旋转）。"""
         p = Pipeline("sample_a3_portrait.pdf", samples_dir, tmp_path)
         try:
+            # 样本文字水平 → AUTO 检测为 0；显式强制旋转以验证 A3 旋转+输出
+            p.result.pages[1].rotation_override = RotationOverride.CW90
+            p.plan = build_process_plan(
+                p.result.pages, p.config,
+                page_text_data=p.text_data,
+                text_width_calculator=p.renderer.get_text_width,
+            )
             a3_pages = [
                 pp for pp in p.plan.pages
                 if not pp.is_blank and pp.source_page_info.original_index == 1
@@ -113,9 +121,16 @@ class TestE2E:
             p.close()
 
     def test_mixed_sizes(self, samples_dir, tmp_path):
-        """混合尺寸：A4 + A3 纵 + A3 横 各页旋转正确。"""
+        """混合尺寸：A4 + A3 纵 + A3 横 各页旋转正确（A3 纵向显式强制旋转）。"""
         p = Pipeline("sample_mixed.pdf", samples_dir, tmp_path)
         try:
+            # 样本文字水平 → AUTO 检测为 0；强制 A3 纵向页旋转
+            p.result.pages[1].rotation_override = RotationOverride.CW90
+            p.plan = build_process_plan(
+                p.result.pages, p.config,
+                page_text_data=p.text_data,
+                text_width_calculator=p.renderer.get_text_width,
+            )
             by_idx = {pp.source_page_info.original_index: pp for pp in p.plan.pages if not pp.is_blank}
             # 0:A4纵 → 不旋转; 1:A3纵 → 90; 2:A3横 → 0; 3:A4纵 → 0
             assert by_idx[0].rotation == 0
@@ -209,9 +224,17 @@ class TestE2E:
             p.close()
 
     def test_rotation_markers_output(self, samples_dir, tmp_path):
-        """方向标记样本端到端：A4 横向 + A3 纵向页输出旋转正确。"""
+        """方向标记样本端到端：A4 横向 + A3 纵向页输出旋转正确（显式强制旋转）。"""
         p = Pipeline("sample_direction_markers.pdf", samples_dir, tmp_path)
         try:
+            # 样本文字水平 → AUTO 检测为 0；强制两页旋转以验证输出旋转正确
+            p.result.pages[0].rotation_override = RotationOverride.CW90
+            p.result.pages[1].rotation_override = RotationOverride.CW90
+            p.plan = build_process_plan(
+                p.result.pages, p.config,
+                page_text_data=p.text_data,
+                text_width_calculator=p.renderer.get_text_width,
+            )
             for pp in p.plan.pages:
                 if pp.is_blank:
                     continue

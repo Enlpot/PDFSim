@@ -118,8 +118,8 @@ def test_rotation_switch(make_window, samples_dir):
     pp = next(pp for pp in c.current_plan.pages
               if not pp.is_blank and pp.source_page_info.original_index == rot_idx)
     assert pp.rotation == 90
-    # 切到"不旋转"（index 3）
-    panel._rot_combo.setCurrentIndex(3)
+    # 切到"不旋转"（index 4，新增"旋转 180°"后顺延）
+    panel._rot_combo.setCurrentIndex(4)
     pp = next(pp for pp in c.current_plan.pages
               if not pp.is_blank and pp.source_page_info.original_index == rot_idx)
     assert pp.rotation == 0

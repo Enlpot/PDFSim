@@ -257,17 +257,24 @@ def plan_page_numbers(
 # 算法 3：页面旋转
 # ---------------------------------------------------------------------------
 def detect_text_rotation(page_text_data: dict) -> int:
-    """文字方向检测：返回 0/90/270。
+    """文字方向检测：返回让主导文字朝右所需的旋转角（0/90/180/270）。
 
-    依据《Stage2_验证报告》3.4 实测结论：
-      - 需旋转页在常见场景（水平正文、字符旋转 90°、源页带 /Rotate）rotate(90) 转书后均可读，
-        故有文字时默认返回 90；
-      - 主导方向为水平反向 (-1, 0)（极罕见的 180° 倒置正文）时返回 270 建议；
-      - 无有效文字返回 90（回退默认，UI 提示用户确认）。
+    原理：统计页面上各 line 的 dir 向量（按字符数加权），把方向量化到
+    4 个主方向（PDF 文本 dir 可能有微小浮点误差，直接比较 exact match 不可靠，
+    用"水平/垂直哪个分量大"归类），找到占主导地位的文字方向，返回需要旋转的
+    角度使旋转后文字水平正向可读（dir=(1,0)，朝右）。
+
+    对应关系：
+      dir=(1, 0)   → 已朝右，不旋转 → 0
+      dir=(0, 1)   → 文字向上，顺时针 90° 后朝右 → 90
+      dir=(-1, 0)  → 文字反向，旋转 180° 后朝右 → 180
+      dir=(0, -1)  → 文字向下，逆时针 90° 后朝右 → 270
+
+    无文字时返回 90（回退默认，UI 提示用户确认）。
     输入：PyMuPDF `get_text("dict")` 的返回。
     """
     blocks = page_text_data.get("blocks", []) if isinstance(page_text_data, dict) else []
-    # 统计各 line 方向，按文本量（字符数）加权
+    # 统计各 line 方向（量化到 4 主方向），按文本量（字符数）加权
     dir_weight: dict[tuple, float] = {}
     for block in blocks:
         if not isinstance(block, dict) or block.get("type") != 0:
@@ -280,19 +287,27 @@ def detect_text_rotation(page_text_data: dict) -> int:
             d = line.get("dir")
             if d is None:
                 continue
-            key = (round(float(d[0]), 4), round(float(d[1]), 4))
-            dir_weight[key] = dir_weight.get(key, 0.0) + chars
+            dx, dy = float(d[0]), float(d[1])
+            if abs(dx) > abs(dy):
+                quantized = (1.0 if dx > 0 else -1.0, 0.0)
+            else:
+                quantized = (0.0, 1.0 if dy > 0 else -1.0)
+            dir_weight[quantized] = dir_weight.get(quantized, 0.0) + chars
 
     if not dir_weight:
         return 90  # 无文字 → 回退默认 90
 
     dominant = max(dir_weight, key=dir_weight.get)
 
-    # 水平反向（180° 倒置正文）：建议 270
-    if abs(dominant[0] + 1.0) < 1e-6 and abs(dominant[1]) < 1e-6:
+    if dominant == (1.0, 0.0):
+        return 0
+    if dominant == (0.0, 1.0):
+        return 90
+    if dominant == (-1.0, 0.0):
+        return 180
+    if dominant == (0.0, -1.0):
         return 270
-    # 其余（水平正向 / 纵向）均按实测返回 90
-    return 90
+    return 90  # fallback
 
 
 def plan_rotation(
@@ -301,20 +316,21 @@ def plan_rotation(
     """按判定表（技术方案 3.3.1）决定是否需要旋转与旋转后尺寸。
 
     对需旋转页（A4 横向、A3 纵向）调用 detect_text_rotation 填充 detected_rotation。
-    返回 (detected_rotation, 旋转后尺寸 mm)。
+    返回 (detected_rotation, 旋转后尺寸 mm)；180° 与 0° 一样不交换宽高
+    （由 _rotated_size 统一处理）。
     """
     w, h = page.width_mm, page.height_mm
     if _approx(w, A3_WIDTH_MM) and _approx(h, A3_HEIGHT_MM):  # A3 纵向 → 需旋转
         r = detect_text_rotation(page_text_data) if page_text_data is not None else 90
         page.detected_rotation = r
-        return r, (A3_HEIGHT_MM, A3_WIDTH_MM)
+        return r, _rotated_size(page, r)
     if _approx(w, A3_HEIGHT_MM) and _approx(h, A3_WIDTH_MM):  # A3 横向 → 不旋转
         page.detected_rotation = 0
         return 0, (A3_WIDTH_MM, A3_HEIGHT_MM)
     if _approx(w, A4_HEIGHT_MM) and _approx(h, A4_WIDTH_MM):  # A4 横向 → 需旋转
         r = detect_text_rotation(page_text_data) if page_text_data is not None else 90
         page.detected_rotation = r
-        return r, (A4_WIDTH_MM, A4_HEIGHT_MM)
+        return r, _rotated_size(page, r)
     if _approx(w, A4_WIDTH_MM) and _approx(h, A4_HEIGHT_MM):  # A4 纵向 → 不旋转
         page.detected_rotation = 0
         return 0, (A4_WIDTH_MM, A4_HEIGHT_MM)
@@ -332,6 +348,8 @@ def final_rotation(page: PageInfo) -> int:
         return 90
     if o is RotationOverride.CCW90:
         return 270
+    if o is RotationOverride.ROT180:
+        return 180
     if o is RotationOverride.NONE:
         return 0
     return page.detected_rotation

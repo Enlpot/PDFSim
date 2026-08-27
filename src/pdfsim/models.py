@@ -74,6 +74,7 @@ class RotationOverride(str, Enum):
     AUTO = "auto"    # 自动检测（默认）：采用 detected_rotation
     CW90 = "cw90"    # 顺时针 90°
     CCW90 = "ccw90"  # 逆时针 90°
+    ROT180 = "rot180"  # 旋转 180°
     NONE = "none"    # 不旋转
 
 

@@ -40,6 +40,15 @@ from pdfsim.ui.styles import (
 
 _FONTS = ["Times New Roman", "SimSun", "SimHei", "KaiTi", "Microsoft YaHei", "Arial"]
 
+# 旋转方向下拉项的固定顺序（与 _rot_combo.addItem 一一对应）
+_ROT_OVERRIDE_ORDER = [
+    RotationOverride.AUTO,
+    RotationOverride.CW90,
+    RotationOverride.CCW90,
+    RotationOverride.ROT180,
+    RotationOverride.NONE,
+]
+
 
 class ConfigPanel(QWidget):
     """底部页面配置面板。"""
@@ -187,6 +196,7 @@ class ConfigPanel(QWidget):
         self._rot_combo.addItem("自动检测", RotationOverride.AUTO)
         self._rot_combo.addItem("顺时针 90°", RotationOverride.CW90)
         self._rot_combo.addItem("逆时针 90°", RotationOverride.CCW90)
+        self._rot_combo.addItem("旋转 180°", RotationOverride.ROT180)
         self._rot_combo.addItem("不旋转", RotationOverride.NONE)
         lay.addWidget(self._rot_combo)
         self._rot_combo.currentIndexChanged.connect(self._on_rot_changed)
@@ -344,9 +354,7 @@ class ConfigPanel(QWidget):
                 rot_ov = src.rotation_override if src is not None else RotationOverride.AUTO
                 self._rot_combo.blockSignals(True)
                 self._rot_combo.setCurrentIndex(
-                    {RotationOverride.AUTO: 0, RotationOverride.CW90: 1,
-                     RotationOverride.CCW90: 2, RotationOverride.NONE: 3}.get(
-                        rot_ov, 0))
+                    _ROT_OVERRIDE_ORDER.index(rot_ov) if rot_ov in _ROT_OVERRIDE_ORDER else 0)
                 self._rot_combo.blockSignals(False)
             else:
                 self._rot_combo.setEnabled(False)
@@ -461,8 +469,7 @@ class ConfigPanel(QWidget):
             self._rot_detect_label.setText(f"批量旋转（{len(vals)} 页值不一致，将统一覆盖）")
         self._rot_combo.blockSignals(True)
         self._rot_combo.setCurrentIndex(
-            {RotationOverride.AUTO: 0, RotationOverride.CW90: 1,
-             RotationOverride.CCW90: 2, RotationOverride.NONE: 3}.get(override, 0))
+            _ROT_OVERRIDE_ORDER.index(override) if override in _ROT_OVERRIDE_ORDER else 0)
         self._rot_combo.blockSignals(False)
 
     def _refresh_batch_style(self, pages: list[int]) -> None:
@@ -641,8 +648,7 @@ class ConfigPanel(QWidget):
     def _on_rot_changed(self, index: int) -> None:
         if self._loading or self.controller is None:
             return
-        override = [RotationOverride.AUTO, RotationOverride.CW90,
-                    RotationOverride.CCW90, RotationOverride.NONE][index]
+        override = _ROT_OVERRIDE_ORDER[index] if 0 <= index < len(_ROT_OVERRIDE_ORDER) else RotationOverride.AUTO
         if self._batch_pages:
             self.controller.set_rotation_override_batch(self._batch_pages, override)
             self._refresh_batch(self._batch_pages)

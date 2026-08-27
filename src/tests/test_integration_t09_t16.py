@@ -164,6 +164,8 @@ class TestT12_A3EvenPush:
     def test_a3_pushed_to_front(self, make_window, samples_dir):
         w, c = open_sample_ui(make_window, samples_dir, "sample_mixed.pdf")
         c.set_auto_number_blank_pages(True)  # 保留 PUSH_FRONT 编页码行为
+        # 样本文字水平 → AUTO 检测为 0；强制 A3 纵向页旋转，验证装订翻转
+        c.set_rotation_override(1, RotationOverride.CW90)
         plan = c.current_plan
         # 期望物理顺序表（用 helper 的 original/blank 构造，键名与断言一致）
         expected = [
@@ -288,14 +290,14 @@ class TestT16_RotationOverride:
         # 定位其物理页（phys1）
         phys = next(pp.physical_index for pp in c.current_plan.pages
                     if not pp.is_blank and pp.source_page_info.original_index == oi)
-        assert c.current_plan.pages[phys - 1].rotation == 90  # 默认自动检测
+        assert c.current_plan.pages[phys - 1].rotation == 0  # 自动检测：样本文字水平正向 → 不旋转
         c.select_physical(phys)
         qtbot.wait(10)
         panel = w.config_panel
         assert panel._rot_combo.currentIndex() == 0  # 自动检测
 
-        # 切到"不旋转"(index3)
-        panel._rot_combo.setCurrentIndex(3)
+        # 切到"不旋转"(index4，新增"旋转 180°"后顺延)
+        panel._rot_combo.setCurrentIndex(4)
         qtbot.wait(10)
         assert c.current_plan.pages[phys - 1].rotation == 0
         assert c.source_page(oi).rotation_override is RotationOverride.NONE

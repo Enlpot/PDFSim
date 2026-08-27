@@ -881,6 +881,8 @@ class AppController(QObject):
             return "无需旋转"
         if p.detected_rotation == 270:
             return "自动检测：逆时针 90°"
+        if p.detected_rotation == 180:
+            return "自动检测：旋转 180°"
         if p.detected_rotation == 90:
             # 无法区分"有文字默认90"与"无文字回退90"，统一提示
             return "自动检测：顺时针 90°"

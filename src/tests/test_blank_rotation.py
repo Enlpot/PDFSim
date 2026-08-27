@@ -54,7 +54,14 @@ class TestBlankRotationInherit:
                          if not pp.is_blank and is_a3(pp.source_page_info))
             a3_back = _back(c, BlankPageSource.A3_BACK)
             assert a3_back.rotation == a3_pp.rotation
-            assert a3_back.rotation != 0  # A3 纵向必然带旋转
+            # 用户强制旋转时，背面同样继承
+            oi = a3_pp.source_page_info.original_index
+            c.set_rotation_override(oi, RotationOverride.CW90)
+            a3_pp2 = _phys_of(c, oi)
+            a3_back2 = _back(c, BlankPageSource.A3_BACK)
+            assert a3_pp2.rotation == 90
+            assert a3_back2.rotation == 90
+            assert a3_back2.output_size_mm == a3_pp2.output_size_mm
         finally:
             c.close()
 

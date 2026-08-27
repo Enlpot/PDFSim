@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """output.py 测试（依据 Stage2 提示语 5.5，用样本 PDF 端到端验证）。"""
 import hashlib
 
@@ -7,7 +7,7 @@ import pytest
 
 from pdfsim.engine import build_process_plan
 from pdfsim.loader import PDFLoader
-from pdfsim.models import A4_HEIGHT_MM, A4_WIDTH_MM, DocumentConfig
+from pdfsim.models import A4_HEIGHT_MM, A4_WIDTH_MM, DocumentConfig, RotationOverride
 from pdfsim.output import PDFOutput
 from pdfsim.renderer import PDFRenderer
 
@@ -20,11 +20,18 @@ def _sha256(path):
     return h.hexdigest()
 
 
-def _make_plan(sample_name, samples_dir, tmp_output, **cfg_kw):
-    """加载样本 → 构建 ProcessPlan（真实文本检测 + 真实字体宽度）。"""
+def _make_plan(sample_name, samples_dir, tmp_output, rotation_overrides=None, **cfg_kw):
+    """加载样本 → 构建 ProcessPlan（真实文本检测 + 真实字体宽度）。
+
+    rotation_overrides: {源页 original_index: RotationOverride}，构建前应用到源页，
+    用于显式构造需旋转页（AUTO 检测对文字水平样本返回 0）。
+    """
     loader = PDFLoader()
     r = loader.open(str(samples_dir / sample_name))
     try:
+        if rotation_overrides:
+            for idx, ov in rotation_overrides.items():
+                r.pages[idx].rotation_override = ov
         text_data = {i: loader.extract_text_data(i) for i in range(len(r.pages))}
         renderer = PDFRenderer()
         cfg_kw.setdefault("output_dir", str(tmp_output))
@@ -101,9 +108,11 @@ class TestOutput:
             doc.close()
 
     def test_rotation_a3_portrait(self, out, samples_dir, tmp_path):
-        """A3 纵向页输出后旋转 90，显示尺寸 1190×841。"""
+        """A3 纵向页输出后旋转 90，显示尺寸 1190×841（显式强制旋转）。"""
         src = samples_dir / "sample_a3_portrait.pdf"
-        _, plan, config = _make_plan("sample_a3_portrait.pdf", samples_dir, tmp_path)
+        _, plan, config = _make_plan(
+            "sample_a3_portrait.pdf", samples_dir, tmp_path,
+            rotation_overrides={1: RotationOverride.CW90})
         result = out.output(str(src), plan, config)
         doc = pymupdf.open(result.output_path)
         try:
@@ -170,7 +179,9 @@ class TestOutput:
           - 物理偶页 → 页码在显示坐标左下角（A3 固定右下角除外）。
         """
         src = samples_dir / "sample_direction_markers.pdf"
-        _, plan, config = _make_plan("sample_direction_markers.pdf", samples_dir, tmp_path)
+        _, plan, config = _make_plan(
+            "sample_direction_markers.pdf", samples_dir, tmp_path,
+            rotation_overrides={0: RotationOverride.CW90, 1: RotationOverride.CW90})
         result = out.output(str(src), plan, config)
         assert result.success
         doc = pymupdf.open(result.output_path)
@@ -220,6 +231,9 @@ class TestOutput:
         loader = PDFLoader()
         r = loader.open(str(src))
         try:
+            # 两页 A4 横向，显式强制旋转 90°
+            r.pages[0].rotation_override = RotationOverride.CW90
+            r.pages[1].rotation_override = RotationOverride.CW90
             td = {i: loader.extract_text_data(i) for i in range(len(r.pages))}
             rend = PDFRenderer()
             cfg = DocumentConfig(output_dir=str(tmp_path))

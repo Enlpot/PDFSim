@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # 供导入 _sta
 
 import pytest
 
-from pdfsim.models import MM_TO_PT, PageNumberPos, PageNumberStyle
+from pdfsim.models import MM_TO_PT, PageNumberPos, PageNumberStyle, RotationOverride
 
 from _stage4_helpers import copy_sample
 
@@ -78,9 +78,10 @@ class TestPageNumberPreview:
             c.close()
 
     def test_rotated_a3_page_right(self, tmp_path):
-        """A3 纵向（规划旋转 90°）：显示坐标中页码仍在右下角。"""
+        """A3 纵向（规划旋转 90°）：显示坐标中页码仍在右下角（显式强制旋转）。"""
         c = _open(tmp_path, "sample_a3_portrait.pdf")
         try:
+            c.set_rotation_override(1, RotationOverride.CW90)  # 样本文字水平 → 强制旋转
             pp = c.processed_page(3)
             assert pp.rotation == 90
             ax, ay, wmm, hmm = _anchor_mm(c, 3)

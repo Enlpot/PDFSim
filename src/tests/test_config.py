@@ -130,11 +130,24 @@ class TestPageConfigs:
 
     def test_rotation_override_serialize(self, cfg_mgr, fake_pdf):
         for rot in (RotationOverride.AUTO, RotationOverride.CW90,
-                    RotationOverride.CCW90, RotationOverride.NONE):
+                    RotationOverride.CCW90, RotationOverride.ROT180,
+                    RotationOverride.NONE):
             pc = PageConfigData(original_index=0, rotation_override=rot)
             cfg_mgr.save_page_configs(fake_pdf, {0: pc})
             loaded = cfg_mgr.load_page_configs(fake_pdf)
             assert loaded[0].rotation_override is rot
+
+    def test_old_config_without_rot180_falls_back(self, cfg_mgr, fake_pdf):
+        # 旧配置无 rot180 值 → 加载 fallback AUTO（向后兼容）
+        import json
+
+        cfg_path = cfg_mgr.config_path_for(fake_pdf)
+        os.makedirs(os.path.dirname(cfg_path), exist_ok=True)
+        with open(cfg_path, "w", encoding="utf-8") as f:
+            json.dump({"version": 2, "source_file": fake_pdf,
+                       "pages": [{"original_index": 0, "rotation_override": "unknown_value"}]}, f)
+        loaded = cfg_mgr.load_page_configs(fake_pdf)
+        assert loaded[0].rotation_override is RotationOverride.AUTO
 
     def test_apply_to_pages(self, cfg_mgr, a3_page):
         pages = [

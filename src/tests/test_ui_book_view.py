@@ -8,6 +8,7 @@ from __future__ import annotations
 import pytest
 from PySide6.QtCore import Qt
 
+from pdfsim.models import RotationOverride
 from pdfsim.ui.book_view import BookViewState
 
 
@@ -90,10 +91,11 @@ def test_highlight_only_selected(book):
 
 
 def test_rotation_badge_data(book, samples_dir):
-    """旋转角标：A4 横向样本被旋转 90°，plan 数据正确。"""
+    """旋转角标：A4 横向样本被强制旋转 90°，plan 数据正确。"""
     _, c, bv = book
-    # 重新打开横向样本
+    # 重新打开横向样本；样本文字水平 → AUTO 检测为 0，显式强制旋转
     c.open_pdf(str(samples_dir / "sample_direction_markers.pdf"), "")
+    c.set_rotation_override(0, RotationOverride.CW90)
     rotated = [pp for pp in c.current_plan.pages if not pp.is_blank and pp.rotation != 0]
     assert rotated, "应有旋转页"
     # paintEvent 可正常执行（不崩溃）

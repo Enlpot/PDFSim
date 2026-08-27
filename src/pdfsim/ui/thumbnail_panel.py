@@ -163,8 +163,15 @@ class _ThumbDelegate(QStyledItemDelegate):
                 labels.append((text, color, slash, dash))
         if pp.is_blank:
             labels.append(("空", COLOR_BLANK_BADGE, False, False))
-        if not pp.is_blank and pp.rotation in (90, 270):
-            labels.append(("旋", COLOR_ROTATE_BADGE, False, True))
+        if not pp.is_blank and pp.rotation != 0:
+            if pp.rotation == 90:
+                labels.append(("旋↻90°", COLOR_ROTATE_BADGE, False, True))
+            elif pp.rotation == 180:
+                labels.append(("旋180°", COLOR_ROTATE_BADGE, False, True))
+            elif pp.rotation == 270:
+                labels.append(("旋↺90°", COLOR_ROTATE_BADGE, False, True))
+            else:
+                labels.append(("旋", COLOR_ROTATE_BADGE, False, True))
         custom = list(pp.source_page_info.custom_labels) if pp.source_page_info else []
 
         font = QFont(FONT_DEFAULT, 8)

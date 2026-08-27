@@ -22,6 +22,7 @@ from pdfsim.models import (
     DocumentConfig,
     PageMark,
     PageNumberPos,
+    RotationOverride,
 )
 
 from _stage4_helpers import Pipeline, assert_physical_table, blank, copy_sample, original
@@ -177,7 +178,11 @@ class TestExpectedTables:
 
     def test_t12_t13_cascade_table(self, samples_dir, tmp_path):
         """级联翻转：A3 落偶数位 → 前插空白推动 → 后续奇偶重排（sample_mixed）。"""
-        p = _make_pipeline("sample_mixed.pdf", samples_dir, tmp_path)
+        def _force_a3_rot(pages):
+            pages[1].rotation_override = RotationOverride.CW90  # A3 纵向样本文字水平 → 强制旋转
+
+        p = _make_pipeline("sample_mixed.pdf", samples_dir, tmp_path,
+                           mutator=_force_a3_rot)
         try:
             p.config.auto_number_blank_pages = True  # 保留 PUSH_FRONT 编页码行为
             p.rebuild()

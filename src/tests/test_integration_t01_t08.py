@@ -23,6 +23,7 @@ from pdfsim.models import (
     BlankPageSource,
     PageMark,
     PageNumberPos,
+    RotationOverride,
 )
 
 from _stage4_helpers import (
@@ -125,13 +126,16 @@ class TestT03_A3PortraitMix:
         src = copy_sample("sample_a3_portrait.pdf", str(tmp_path))
         p = Pipeline(src, str(tmp_path))
         try:
+            # 样本文字水平 → AUTO 检测为 0，显式强制旋转以验证 A3 旋转+背面
+            p.result.pages[1].rotation_override = RotationOverride.CW90
+            p.rebuild()
             # 找到 A3 纵向源页（idx1）
             a3_pp = [pp for pp in p.plan.pages
                      if pp.source_page_info.original_index == 1]
             assert len(a3_pp) == 1
             pp = a3_pp[0]
             assert pp.is_blank is False
-            assert pp.rotation == 90                       # 文字方向检测 → 90
+            assert pp.rotation == 90                       # 显式强制旋转 → 90
             assert pp.output_size_mm == pytest.approx(
                 (A3_HEIGHT_MM, A3_WIDTH_MM), abs=0.2)     # 420×297 横向
             assert pp.number_position == PageNumberPos.BOTTOM_RIGHT

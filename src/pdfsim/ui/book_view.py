@@ -187,11 +187,15 @@ class BookView(QWidget):
             self._paint_badge(painter, x, y, "空", COLOR_BLANK_BADGE, solid=True, top=False)
         if self._is_a3(phys):
             self._paint_badge(painter, x + w, y, "横", COLOR_BLANK_BADGE, solid=False, top=True, anchor_right=True)
-        if not pp.is_blank and pp.rotation in (90, 270):
+        if not pp.is_blank and pp.rotation != 0:
             if pp.rotation == 90:
                 label = "旋↻90°"
-            else:
+            elif pp.rotation == 180:
+                label = "旋180°"
+            elif pp.rotation == 270:
                 label = "旋↺90°"
+            else:
+                label = "旋"
             self._paint_badge(painter, x, y, label, COLOR_ROTATE_BADGE, solid=False, top=True)
 
         # 页码预览（页码位置 Bug 任务 2）：按规划位置/样式叠加绘制，与输出一致
