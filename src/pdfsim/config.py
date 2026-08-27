@@ -233,6 +233,10 @@ class ConfigManager:
             cfg.auto_fill_last_page = g["auto_fill_last_page"]
         if isinstance(g.get("auto_number_blank_pages"), bool):
             cfg.auto_number_blank_pages = g["auto_number_blank_pages"]
+        if isinstance(g.get("auto_adjust_overlap"), bool):
+            cfg.auto_adjust_overlap = g["auto_adjust_overlap"]
+        if isinstance(g.get("auto_shrink_levels"), int):
+            cfg.auto_shrink_levels = max(0, min(4, g["auto_shrink_levels"]))
         if isinstance(g.get("auto_detect_keywords"), dict):
             cfg.auto_detect_keywords = _keywords_from_dict(g["auto_detect_keywords"])
         if isinstance(g.get("custom_labels"), list):
@@ -251,6 +255,8 @@ class ConfigManager:
             "style": _style_to_dict(config.global_style),
             "auto_fill_last_page": config.auto_fill_last_page,
             "auto_number_blank_pages": config.auto_number_blank_pages,
+            "auto_adjust_overlap": config.auto_adjust_overlap,
+            "auto_shrink_levels": config.auto_shrink_levels,
             "auto_detect_keywords": _keywords_to_dict(config.auto_detect_keywords),
             "custom_labels": list(config.custom_labels),
         }

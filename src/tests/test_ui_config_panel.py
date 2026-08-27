@@ -164,6 +164,7 @@ def test_style_override(make_window, samples_dir):
 def test_overlap_warning_visible(make_window, samples_dir):
     """重叠警告条显示/隐藏。"""
     w, c = _open(make_window, samples_dir, "sample_with_pagenum.pdf")
+    c.set_auto_adjust_overlap(False)  # 验证"检测→警告"原始语义，关闭自动调整
     panel = w.config_panel
     # 打开时 select=1 已触发 load_page（经信号），直接检查
     panel.load_page(1)

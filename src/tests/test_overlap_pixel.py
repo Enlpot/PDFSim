@@ -109,6 +109,7 @@ class TestMixedOverlap:
     def _build(self, text_blocks, pixel_result, with_pixel_checker=True):
         src = [PageInfo(original_index=0, width_mm=210.0, height_mm=297.0)]
         cfg = DocumentConfig(start_page_number=1)
+        cfg.auto_adjust_overlap = False  # 本组验证"检测→警告"原始语义，关闭自动调整
         text_data = {0: {"blocks": []}}
 
         def w_calc(t, fs):
@@ -223,6 +224,7 @@ class TestUiOverlapBadge:
         w = make_window()
         c = w.controller
         c.open_pdf(str(samples_dir / "sample_with_pagenum.pdf"), "")
+        c.set_auto_adjust_overlap(False)  # 验证"检测→警告"原始语义，关闭自动调整
         panel = w.thumbnail_panel
 
         warned = [

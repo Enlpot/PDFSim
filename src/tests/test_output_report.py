@@ -85,6 +85,7 @@ class TestReportOverlap:
         c = AppController()
         try:
             c.open_pdf(src, "")
+            c.set_auto_adjust_overlap(False)  # 验证"检测→警告"原始语义，关闭自动调整
             warned = {w.physical_index for w in c.current_plan.warnings}
             assert warned, "样本应产生重叠警告"
             for row in c.get_report_data():

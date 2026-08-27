@@ -602,9 +602,11 @@ class TestBuildProcessPlan:
         blocks = {
             0: [(500.0, 800.0, 595.0, 830.0)],  # 显示坐标右下角（底部）
         }
+        conf = cfg()
+        conf.auto_adjust_overlap = False  # 验证"检测→警告"原始语义，关闭自动调整
         plan = build_process_plan(
             src,
-            cfg(),
+            conf,
             page_text_data={0: text_data((1.0, 0.0))},
             text_width_calculator=lambda t, fs: len(t) * fs * 0.5,
             text_block_calculator=lambda idx: blocks.get(idx),

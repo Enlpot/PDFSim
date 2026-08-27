@@ -719,6 +719,16 @@ class AppController(QObject):
         self.config.auto_number_blank_pages = bool(value)
         self._after_change()
 
+    def set_auto_adjust_overlap(self, value: bool) -> None:
+        """设置"检测到页码重叠自动调整"开关（默认开）。"""
+        self.config.auto_adjust_overlap = bool(value)
+        self._after_change()
+
+    def set_auto_shrink_levels(self, levels: int) -> None:
+        """设置"自动缩小字号最多几级"（0~4，默认 2）。"""
+        self.config.auto_shrink_levels = max(0, min(4, int(levels)))
+        self._after_change()
+
     def set_keywords(self, keywords: dict) -> None:
         self.config.auto_detect_keywords = keywords
         self._after_change()

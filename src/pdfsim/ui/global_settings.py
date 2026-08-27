@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSpinBox,
     QVBoxLayout,
+    QWidget,
 )
 
 from pdfsim.models import PageMark, PageNumberStyle
@@ -55,6 +56,28 @@ class GlobalSettingsDialog(QDialog):
             "推正面空白页（PUSH_FRONT）与补齐末页空白页（FILL_LAST）是否显示页码、占序号。\n"
             "关（默认）：不显示页码、不占序号，后续页码顺延；封面/签字/A3 背面不受影响。")
         page_form.addRow(self._blank_num_check)
+
+        # -- 重叠自动调整 --
+        self._auto_adj_check = QCheckBox("检测到页码重叠自动调整")
+        self._auto_adj_check.setToolTip(
+            "检测到页码与内容重叠时，自动向页面边缘移动页码避开；\n"
+            "移动到边界仍重叠则缩小字号。只调整重叠的那一页。")
+        page_form.addRow(self._auto_adj_check)
+
+        shrink_row = QWidget()
+        shrink_layout = QHBoxLayout(shrink_row)
+        shrink_layout.setContentsMargins(0, 0, 0, 0)
+        shrink_layout.addWidget(QLabel("自动缩小字号最多"))
+        self._shrink_combo = QComboBox()
+        self._shrink_combo.addItems(["0 级", "1 级", "2 级", "3 级", "4 级"])
+        self._shrink_combo.setCurrentIndex(2)  # 默认 2
+        shrink_layout.addWidget(self._shrink_combo)
+        shrink_layout.addWidget(QLabel("（每级 1pt）"))
+        shrink_layout.addStretch()
+        shrink_row.setStyleSheet("margin-left: 20px;")  # 缩进到开关下面
+        page_form.addRow(shrink_row)
+        self._shrink_row = shrink_row
+        self._auto_adj_check.stateChanged.connect(self._on_auto_adj_changed)
         root.addWidget(page_group)
 
         # -- 页码样式 --
@@ -129,6 +152,9 @@ class GlobalSettingsDialog(QDialog):
         cfg = self.controller.config
         self._start_spin.setValue(cfg.start_page_number)
         self._blank_num_check.setChecked(cfg.auto_number_blank_pages)
+        self._auto_adj_check.setChecked(cfg.auto_adjust_overlap)
+        self._shrink_combo.setCurrentIndex(max(0, min(4, cfg.auto_shrink_levels)))
+        self._on_auto_adj_changed(self._auto_adj_check.isChecked())
         style = cfg.global_style
         self._font_combo.setCurrentText(style.font)
         self._size_spin.setValue(style.fontsize_pt)
@@ -146,6 +172,11 @@ class GlobalSettingsDialog(QDialog):
         self._kw_body.setText(", ".join(kw.get("body", [])))
         self._fill_check.setChecked(cfg.auto_fill_last_page)
         self._suffix_edit.setText(cfg.output_suffix)
+
+    def _on_auto_adj_changed(self, checked) -> None:
+        """自动调整开关联动：未勾选时缩小级别下拉置灰。"""
+        enabled = bool(checked)
+        self._shrink_row.setEnabled(enabled)
 
     def _split_kw(self, text: str) -> list[str]:
         return [s.strip() for s in text.split(",") if s.strip()]
@@ -186,6 +217,8 @@ class GlobalSettingsDialog(QDialog):
         if self.controller is not None:
             self.controller.set_start_page_number(self._start_spin.value())
             self.controller.set_auto_number_blank_pages(self._blank_num_check.isChecked())
+            self.controller.set_auto_adjust_overlap(self._auto_adj_check.isChecked())
+            self.controller.set_auto_shrink_levels(self._shrink_combo.currentIndex())
             self.controller.set_global_style(self._current_style())
             self.controller.set_keywords(
                 {

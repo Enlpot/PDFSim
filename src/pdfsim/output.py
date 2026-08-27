@@ -149,7 +149,12 @@ class PDFOutput:
                 if pp.number_text is None or pp.number_point is None:
                     continue
                 page = out[pp.physical_index - 1]
-                style = pp.source_page_info.style_override or config.global_style
+                # 有效样式优先：重叠自动调整后的副本 > 单页覆盖 > 全局
+                style = (
+                    pp.effective_style
+                    or pp.source_page_info.style_override
+                    or config.global_style
+                )
                 fontname, color = self._setup_font(page, style, font_path)
                 x, y = pp.number_point
                 # insert_text 使用 MediaBox（未旋转）坐标；page.rect 是 /Rotate 旋转后的

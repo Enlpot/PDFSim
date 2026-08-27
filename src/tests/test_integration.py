@@ -175,6 +175,7 @@ class TestE2E:
         """重叠检测：已有页码样本 → 检测到与新增页码重叠。"""
         p = Pipeline("sample_with_pagenum.pdf", samples_dir, tmp_path)
         try:
+            p.config.auto_adjust_overlap = False  # 验证"检测→警告"原始语义，关闭自动调整
             plan2 = build_process_plan(
                 p.result.pages, p.config,
                 page_text_data=p.text_data,

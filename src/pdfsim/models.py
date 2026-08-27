@@ -132,6 +132,8 @@ class DocumentConfig:
     custom_labels: list[str] = field(default_factory=list)   # 用户可添加的自定义关键词
     auto_fill_last_page: bool = False       # 自动补齐末页，默认否
     auto_number_blank_pages: bool = False   # 其他空白页自动编页码（PUSH_FRONT/FILL_LAST），默认关
+    auto_adjust_overlap: bool = True        # 检测到页码重叠自动调整（默认开）
+    auto_shrink_levels: int = 2             # 自动缩小字号最多几级（每级 1pt，默认 2）
     output_dir: str = ""                    # 输出目录，默认空=原 PDF 所在文件夹
     output_suffix: str = "（打印装订）"       # 输出文件名后缀
     config_filename: str = ""               # 配置文件路径（打开时确定）
@@ -152,6 +154,21 @@ class ProcessedPage:
     number_point: tuple[float, float] | None  # 页码文字绘制点（PDF 未旋转坐标 pt）；无页码为 None
     rotation: int                         # 输出时该页的最终旋转角（0/90/180/270）
     output_size_mm: tuple[float, float]   # 输出页最终尺寸（宽×高，mm，旋转后）
+    effective_style: "PageNumberStyle | None" = None  # 该页实际生效样式（重叠自动调整后的副本）；None=沿用全局/覆盖
+    overlap_adjusted: bool = False        # 是否经过重叠自动调整（成功避开）
+    overlap_adjust_result: "OverlapAdjustResult | None" = None  # 自动调整结果详情（含失败仍重叠时）
+
+
+@dataclass
+class OverlapAdjustResult:
+    """页码重叠自动调整结果（成功避开时 adjusted=True）。"""
+    adjusted: bool = False                 # 是否成功调整（移动或缩小字号后不重叠）
+    original_fontsize_pt: float | None = None  # 原始字号
+    final_fontsize_pt: float | None = None     # 调整后字号（None=未变）
+    fontsize_shrank_levels: int = 0            # 缩小了几级（0=未缩小）
+    moved: bool = False                        # 是否向边缘移动过
+    final_margins_mm: tuple | None = None      # 调整后边距 (left, right, bottom, top) mm
+    still_overlapping: bool = False            # 调整失败、仍重叠
 
 
 @dataclass
@@ -160,6 +177,7 @@ class OverlapWarning:
     physical_index: int                   # 发生重叠的物理页
     number_text: str                      # 页码文字
     overlap_rect_pt: tuple[float, float, float, float]  # 重叠区域（显示坐标 pt）
+    adjust_result: "OverlapAdjustResult | None" = None  # 该页重叠自动调整结果（若有）
 
 
 @dataclass

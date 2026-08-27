@@ -104,6 +104,7 @@ class TestT09_Performance:
 class TestT10_Overlap:
     def test_overlap_warning_triggered(self, make_window, samples_dir, qtbot):
         w, c = open_sample_ui(make_window, samples_dir, "sample_with_pagenum.pdf")
+        c.set_auto_adjust_overlap(False)  # 验证"检测→警告"原始语义，关闭自动调整
         # 引擎层：plan warnings 非空
         assert c.current_plan.warnings, "重叠警告未触发"
         warned_phys = [w.physical_index for w in c.current_plan.warnings]
@@ -121,6 +122,7 @@ class TestT10_Overlap:
 
     def test_adjust_clears_warning(self, make_window, samples_dir, qtbot):
         w, c = open_sample_ui(make_window, samples_dir, "sample_with_pagenum.pdf")
+        c.set_auto_adjust_overlap(False)  # 保留重叠警告以便验证手动调整可清除
         warned = c.current_plan.warnings[0]
         oi = c.current_plan.pages[warned.physical_index - 1].source_page_info.original_index
         # 调整全局页码位置（margin 右移，远离右上角原内容）→ 警告消除

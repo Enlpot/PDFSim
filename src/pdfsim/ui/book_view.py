@@ -28,6 +28,7 @@ from pdfsim.ui.styles import (
     COLOR_HIGHLIGHT,
     COLOR_HIGHLIGHT_GLOW,
     COLOR_OVERLAP_BADGE,
+    COLOR_AUTO_ADJUST,
     COLOR_PAGE_BORDER,
     COLOR_ROTATE_BADGE,
     FONT_DEFAULT,
@@ -205,6 +206,10 @@ class BookView(QWidget):
             and self.controller.overlap_warning_for(phys) is not None
         ):
             self._paint_badge(painter, x, y, "叠", COLOR_OVERLAP_BADGE, solid=True, top=False)
+        # 自动调整过（原本重叠已成功避开）→ 同排显示"叠"+"自"（"自"右移一个角标位）
+        if pp.overlap_adjusted:
+            self._paint_badge(painter, x, y, "叠", COLOR_OVERLAP_BADGE, solid=True, top=False)
+            self._paint_badge(painter, x + 30, y, "自", COLOR_AUTO_ADJUST, solid=True, top=False)
 
         # 页码预览（页码位置 Bug 任务 2）：按规划位置/样式叠加绘制，与输出一致
         info = self.controller.get_page_number_info(phys)

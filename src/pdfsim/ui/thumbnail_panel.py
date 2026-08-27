@@ -37,6 +37,7 @@ from pdfsim.ui.styles import (
     COLOR_MARK_NO_COUNT,
     COLOR_MARK_NO_NUMBER,
     COLOR_MARK_SIGN,
+    COLOR_AUTO_ADJUST,
     COLOR_OVERLAP_BADGE,
     COLOR_ROTATE_BADGE,
     COLOR_SELECTED_ITEM,
@@ -179,6 +180,10 @@ class _ThumbDelegate(QStyledItemDelegate):
             and self._panel.controller.overlap_warning_for(phys) is not None
         ):
             labels.append(("叠", COLOR_OVERLAP_BADGE, False, True))
+        # 自动调整过（原本重叠，已成功避开）→ 同时显示"叠"+"自"
+        if pp.overlap_adjusted:
+            labels.append(("叠", COLOR_OVERLAP_BADGE, False, True))
+            labels.append(("自", COLOR_AUTO_ADJUST, False, False))
         custom = list(pp.source_page_info.custom_labels) if pp.source_page_info else []
 
         font = QFont(FONT_DEFAULT, 8)
