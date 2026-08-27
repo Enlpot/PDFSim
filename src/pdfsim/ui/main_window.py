@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QToolBar,
 )
 
+from pdfsim import __version__ as VERSION
 from pdfsim.loader import PDFLoadError, PDFPasswordError
 from pdfsim.ui import dialogs
 from pdfsim.ui.app_controller import AppController
@@ -37,8 +38,6 @@ from pdfsim.ui.styles import (
     WINDOW_MIN_W,
 )
 from pdfsim.ui.thumbnail_panel import ThumbnailPanel
-
-VERSION = "3.0.0"
 
 
 class MainWindow(QMainWindow):

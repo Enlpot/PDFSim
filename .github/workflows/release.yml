@@ -45,8 +45,24 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
 
+      - name: Inject version from tag
+        # 把 tag 版本写入 __init__.py（如 v0.1.0 → __version__="0.1.0"），
+        # 使 exe 内"关于"页面版本与 Release 版本一致
+        run: |
+          TAG="${{ github.ref_name }}"
+          VER="${TAG#v}"
+          sed -i "s/__version__ = \".*\"/__version__ = \"$VER\"/" src/pdfsim/__init__.py
+          echo "== 注入后版本 =="; grep -n "__version__" src/pdfsim/__init__.py
+        shell: bash
+
       - name: Build PDFSim.exe
         run: python build.py
+        shell: bash
+
+      - name: Rename exe with version
+        run: |
+          cp "dist/PDFSim.exe" "dist/PDFSim-${{ github.ref_name }}.exe"
+          ls -la dist/ | grep -i exe
         shell: bash
 
       - name: Generate 使用说明书 PDF
@@ -56,7 +72,7 @@ jobs:
           QT_QPA_PLATFORM: windows
 
       - name: Compute SHA-256
-        run: python -c "import hashlib;print(hashlib.sha256(open('dist/PDFSim.exe','rb').read()).hexdigest())" > dist/PDFSim.exe.sha256
+        run: python -c "import hashlib;print(hashlib.sha256(open('dist/PDFSim-${{ github.ref_name }}.exe','rb').read()).hexdigest())" > "dist/PDFSim-${{ github.ref_name }}.exe.sha256"
         shell: bash
 
       - name: Prepare release notes
@@ -74,7 +90,7 @@ jobs:
             echo "## 校验"
             echo "- 全量测试：pytest src/tests 通过"
             echo "- 打包自检（PDFSim_selftest）：核心功能逐项验证通过"
-            echo "- SHA-256 见附件 PDFSim.exe.sha256"
+            echo "- SHA-256 见附件 PDFSim-${{ github.ref_name }}.exe.sha256"
             echo "- 使用说明书见附件 PDFSim使用说明书.pdf"
           } > notes.md
           cat notes.md
@@ -85,7 +101,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cp "docs/使用说明书.pdf" "dist/PDFSim使用说明书.pdf"
-          gh release create "${{ github.ref_name }}" dist/PDFSim.exe dist/PDFSim.exe.sha256 "dist/PDFSim使用说明书.pdf" \
+          EXE="dist/PDFSim-${{ github.ref_name }}.exe"
+          gh release create "${{ github.ref_name }}" "$EXE" "$EXE.sha256" "dist/PDFSim使用说明书.pdf" \
             --title "PDFSim ${{ github.ref_name }}" \
             --notes-file notes.md
         shell: bash
