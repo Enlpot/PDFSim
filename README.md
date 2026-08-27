@@ -41,8 +41,28 @@ python build.py               # 输出 dist/PDFSim.exe
 ## 文档
 
 - 使用说明书：`docs/使用说明书.md`
-- 各阶段功能/审查报告：`docs/`
+- 界面原型：`docs/UI原型说明.md`
+- 技术方案：`docs/技术方案.md`
+- 测试矩阵：`docs/测试矩阵.md`
+
+### 功能/阶段报告
+
+| 类别 | 文档 |
+|------|------|
+| 功能报告 | `docs/多选批量旋转与样式_功能报告.md` |
+| 功能报告 | `docs/空白页开关_双列_滚动平滑_功能报告.md` |
+| 功能报告 | `docs/规则变更与批量配置_报告.md` |
+| Bug 修复 | `docs/页码位置Bug修复报告.md` |
+| Bug 修复 | `docs/空白页方向Bug修复报告.md` |
+| Bug 修复 | `docs/跳回第一页Bug修复报告.md` |
+| 验证/优化 | `docs/旋转页码验证报告.md`、`docs/性能优化报告.md` |
+| 测试报告 | `docs/Stage2_测试报告.md`、`docs/Stage3_测试报告.md`、`docs/Stage4_测试报告.md` |
+| 打包 | `docs/Stage5_打包报告.md` |
 
 ## 技术栈
 
 Python 3.10+ · PySide6 · pikepdf · PyMuPDF · pytest
+
+## License
+
+[MIT](LICENSE) © 2026 Enlpot
