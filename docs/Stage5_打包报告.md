@@ -261,4 +261,25 @@ python -m PyInstaller --clean --noconfirm --onefile --windowed `
 | 源码回归 | 全量 **336 passed**（317 基线 + 19 例专项） |
 | 启动验证 | 新 EXE 启动进程存活正常，验证后手动结束 |
 
+### 11.5 体积瘦身（416.3 MB → 78.4 MB，-81%）
+
+应用仅使用 QtCore/QtGui/QtWidgets，原 `--collect-all PySide6` 会把 Qt 全家桶打入
+（Qt6WebEngineCore.dll 194MB、QML、多媒体、全语言翻译、资源等 ~300MB 冗余）。
+
+**改动**（`build.py` + `PDFSim.spec` + `PDFSim_selftest.spec`）：
+- 移除 `--collect-all PySide6`，改用 `--exclude-module` 排除 49 个未使用的 `PySide6.Qt*` 模块
+- 保留 `--collect-all pikepdf/pymupdf`（小且确保子模块完整）
+- 功能界面零改动（仅打包配置变更）
+
+**验证（功能不变）**：
+- 瘦身版 `PDFSim_selftest.exe`（console 自检）：**9/9 项功能全部通过**（模块加载/中文界面/打开书签/标记联动物理顺序/旋转检测/输出+原文件SHA/加密/损坏/配置）
+- 瘦身版主 `PDFSim.exe`：启动进程存活正常
+- 全量 pytest：**336 passed**（源码未动）
+
+| 项目 | 瘦身前 | 瘦身后 |
+|------|--------|--------|
+| 产物大小 | 416.3 MB | **78.4 MB**（-81%） |
+| SHA-256 | `554A6B19...292F8EB` | `036C1FFA2AAB4EAAD752F3503C700DCB155EF2739522D5D754FCBA313C419CE2` |
+| 时间戳 | 2026-08-27 | 2026-08-27 |
+
 *—— Stage 5 打包报告 完 ——*
