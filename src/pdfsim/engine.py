@@ -497,16 +497,61 @@ def number_rect_from_anchor(
 def detect_overlap(
     number_rect: tuple[float, float, float, float],
     text_bboxes: list[tuple[float, float, float, float]],
-) -> OverlapWarning | None:
-    """检测页码矩形与文本块列表是否重叠（仅文本块，D9）。"""
+) -> list[tuple[float, float, float, float]]:
+    """检测页码矩形与文本块列表的重叠，返回所有重叠区域列表（空列表=无重叠）。
+
+    与页码矩形实质重叠的每个文本块都记录（收集所有，不只第一个命中）。
+    """
+    hits: list[tuple[float, float, float, float]] = []
     for tb in text_bboxes:
         if rects_intersect(number_rect, tb):
-            return OverlapWarning(
-                physical_index=0,  # 由调用方回填
-                number_text="",
-                overlap_rect_pt=intersection_rect(number_rect, tb),
-            )
-    return None
+            hits.append(intersection_rect(number_rect, tb))
+    return hits
+
+
+# ---------------------------------------------------------------------------
+# 算法 5b：像素级重叠检测（覆盖扫描件——整页图片时文本块为空）
+# ---------------------------------------------------------------------------
+def detect_pixel_overlap(
+    page,
+    number_rect_pt: tuple[float, float, float, float],
+    dpi: int = 150,
+    brightness_threshold: int = 230,
+    min_overlap_pixels: int = 30,
+) -> bool:
+    """像素级重叠检测：渲染页码区域小矩形，统计非白色像素。
+
+    参数：
+        page: fitz.Page 对象（无旋转场景下渲染坐标=显示坐标；旋转页通常由
+              文本块检测覆盖，此处作为扫描件补充）。
+        number_rect_pt: 页码区域（显示坐标，pt）。
+        dpi: 渲染分辨率（150dpi 下约 30×15pt → 63×31 像素，< 1ms）。
+        brightness_threshold: 亮度阈值，低于该值视为"有内容"（纯白 255 不触发，
+              浅灰背景 240+ 不触发，文字/线条通常 <200 触发）。
+        min_overlap_pixels: 区域内非白色像素总数阈值，过滤零散噪点
+              （用"总数"而非"连续"：斜体/细线文字笔画断续，连续判定易漏报）。
+
+    返回 True 表示页码区域存在实质内容（可能重叠）。
+    """
+    import fitz  # 延迟导入：engine 顶层保持不依赖 PyMuPDF，仅像素检测路径需要
+
+    x0, y0, x1, y1 = number_rect_pt
+    # 扩大 2pt，确保边界覆盖
+    clip = fitz.Rect(x0 - 2, y0 - 2, x1 + 2, y1 + 2)
+    pix = page.get_pixmap(clip=clip, dpi=dpi)
+    n = pix.n
+    samples = pix.samples
+    dark = 0
+    for y in range(pix.height):
+        row = y * pix.width * n
+        for x in range(pix.width):
+            idx = row + x * n
+            r = samples[idx]
+            g = samples[idx + 1]
+            b = samples[idx + 2]
+            if (r + g + b) // 3 < brightness_threshold:
+                dark += 1
+    return dark >= min_overlap_pixels
 
 
 # ---------------------------------------------------------------------------
@@ -523,6 +568,7 @@ def build_process_plan(
     page_text_data: dict[int, dict] | None = None,
     text_width_calculator=None,
     text_block_calculator=None,
+    pixel_overlap_checker=None,
     blank_configs: dict[str, set[PageMark]] | None = None,
 ) -> ProcessPlan:
     """串联算法 1→3→2→4→5，产出完整 ProcessPlan。
@@ -530,7 +576,9 @@ def build_process_plan(
     page_text_data: {原始页索引(0-based): get_text("dict") 结果}，用于文字方向检测。
     text_width_calculator: f(text, fontsize) -> pt，页码文字宽度；None 时用粗略估计。
     text_block_calculator: f(原始页索引) -> [(x0,y0,x1,y1) 显示坐标文本块] | None；
-        用于重叠检测；None 时跳过重叠检测。
+        用于重叠检测；None 时跳过文本块重叠检测。
+    pixel_overlap_checker: f(原始页索引, 页码显示坐标 rect(pt)) -> bool；
+        像素级重叠检测（覆盖扫描件）；None 时跳过。
     blank_configs: {blank_id: 用户显式标记集}，应用到自动插入的空白页
         （覆盖来源默认页码行为；blank_id 见 make_blank_id）。
     """
@@ -578,19 +626,46 @@ def build_process_plan(
         pp.number_point = pt
         pp.number_position = _base_position(pp, style)
 
-        # 算法 5：重叠检测
-        if pt is not None and text_block_calculator is not None:
+        # 算法 5：重叠检测（混合：文本块 + 像素）
+        if pt is not None:
             src_idx = pp.source_page_info.original_index
-            blocks = text_block_calculator(src_idx) if src_idx is not None else None
-            if blocks:
-                W = pp.output_size_mm[0] * MM_TO_PT
-                anchor_disp = _display_anchor(pp, style, text_w, W)
-                num_rect = number_rect_from_anchor(anchor_disp, text_w, style.fontsize_pt)
-                ov = detect_overlap(num_rect, blocks)
-                if ov is not None:
-                    ov.physical_index = pp.physical_index
-                    ov.number_text = pp.number_text
-                    warnings.append(ov)
+            W = pp.output_size_mm[0] * MM_TO_PT
+            anchor_disp = _display_anchor(pp, style, text_w, W)
+            num_rect = number_rect_from_anchor(anchor_disp, text_w, style.fontsize_pt)
+
+            # 5a：文本块检测（收集所有重叠）
+            text_hits: list[tuple[float, float, float, float]] = []
+            if text_block_calculator is not None and src_idx is not None:
+                # 总旋转（源页自带 /Rotate + 规划旋转），传给回调做坐标变换，
+                # 与 calculate_number_position 的 total_rotation 一致。
+                total_rotation = (
+                    pp.source_page_info.source_rotation + pp.rotation
+                ) % 360
+                try:
+                    blocks = text_block_calculator(src_idx, total_rotation)
+                except TypeError:
+                    blocks = text_block_calculator(src_idx)
+                if blocks:
+                    text_hits = detect_overlap(num_rect, blocks)
+
+            # 5b：像素检测（补充，覆盖扫描件——整页图片时文本块为空）
+            pixel_hit = False
+            if (
+                not text_hits
+                and pixel_overlap_checker is not None
+                and src_idx is not None
+                and not pp.is_blank
+            ):
+                pixel_hit = bool(pixel_overlap_checker(src_idx, num_rect))
+
+            # 任一命中 → 报重叠警告
+            if text_hits or pixel_hit:
+                overlap_rect = text_hits[0] if text_hits else num_rect
+                warnings.append(OverlapWarning(
+                    physical_index=pp.physical_index,
+                    number_text=pp.number_text,
+                    overlap_rect_pt=overlap_rect,
+                ))
 
     return ProcessPlan(
         pages=processed,

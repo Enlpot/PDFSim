@@ -27,6 +27,7 @@ from pdfsim.ui.styles import (
     COLOR_BOOK_BG_EDGE,
     COLOR_HIGHLIGHT,
     COLOR_HIGHLIGHT_GLOW,
+    COLOR_OVERLAP_BADGE,
     COLOR_PAGE_BORDER,
     COLOR_ROTATE_BADGE,
     FONT_DEFAULT,
@@ -197,6 +198,13 @@ class BookView(QWidget):
             else:
                 label = "旋"
             self._paint_badge(painter, x, y, label, COLOR_ROTATE_BADGE, solid=False, top=True)
+
+        # 重叠警告角标（红色"叠"）：页面顶部外侧（top=False），不与旋转角标（页内）冲突
+        if (
+            not pp.is_blank
+            and self.controller.overlap_warning_for(phys) is not None
+        ):
+            self._paint_badge(painter, x, y, "叠", COLOR_OVERLAP_BADGE, solid=True, top=False)
 
         # 页码预览（页码位置 Bug 任务 2）：按规划位置/样式叠加绘制，与输出一致
         info = self.controller.get_page_number_info(phys)

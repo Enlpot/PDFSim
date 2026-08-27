@@ -512,15 +512,31 @@ class TestDetectOverlap:
     def test_t10_overlap_hit(self):
         num = (100.0, 100.0, 150.0, 130.0)
         blocks = [(120.0, 110.0, 200.0, 140.0)]  # 与 num 相交
-        ov = detect_overlap(num, blocks)
-        assert ov is not None
-        # 重叠区域 = 交集
-        assert ov.overlap_rect_pt == (120.0, 110.0, 150.0, 130.0)
+        hits = detect_overlap(num, blocks)
+        assert hits == [(120.0, 110.0, 150.0, 130.0)]  # 重叠区域 = 交集
+
+    def test_collect_all_overlaps(self):
+        """收集所有重叠文本块，不只第一个命中。"""
+        num = (100.0, 100.0, 150.0, 130.0)
+        blocks = [
+            (120.0, 110.0, 200.0, 140.0),   # 命中 → (120,110,150,130)
+            (90.0, 105.0, 140.0, 125.0),    # 命中 → (100,105,140,125)
+            (300.0, 300.0, 400.0, 400.0),   # 不命中
+            (100.0, 100.0, 150.0, 130.0),   # 完全包含 → 全交集
+        ]
+        hits = detect_overlap(num, blocks)
+        assert len(hits) == 3
+        assert hits[0] == (120.0, 110.0, 150.0, 130.0)
+        assert hits[1] == (100.0, 105.0, 140.0, 125.0)
+        assert hits[2] == (100.0, 100.0, 150.0, 130.0)
 
     def test_no_overlap(self):
         num = (100.0, 100.0, 150.0, 130.0)
         blocks = [(200.0, 100.0, 300.0, 130.0)]  # 相距 50pt
-        assert detect_overlap(num, blocks) is None
+        assert detect_overlap(num, blocks) == []
+
+    def test_empty_blocks(self):
+        assert detect_overlap((0.0, 0.0, 10.0, 10.0), []) == []
 
     def test_tolerance_edges(self):
         # 贴边（重叠宽=0）→ 不误报

@@ -14,6 +14,7 @@ COLOR_BLANK_BADGE = "#999999"       # 空白页角标（灰）
 COLOR_ROTATE_BADGE = "#5B9BD5"      # 旋转角标（蓝）
 COLOR_OVERLAP_WARN = "#FFF3CD"      # 重叠警告背景（浅黄）
 COLOR_OVERLAP_TEXT = "#856404"      # 重叠警告文字（深黄）
+COLOR_OVERLAP_BADGE = "#E74C3C"     # 重叠警告角标（红）
 COLOR_MARK_COVER = "#4A90D9"        # 封面徽标底（蓝）
 COLOR_MARK_SIGN = "#E8912D"         # 签字页徽标底（橙）
 COLOR_MARK_NO_NUMBER = "#9E9E9E"    # 不加页码徽标底（灰）

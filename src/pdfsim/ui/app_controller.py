@@ -362,11 +362,17 @@ class AppController(QObject):
             return content_w - x, content_h - y
         return x, y
 
-    def _text_block_calculator(self, src_index: int | None) -> list | None:
+    def _text_block_calculator(
+        self, src_index: int | None, total_rotation: int | None = None
+    ) -> list | None:
         """返回源页在输出显示坐标系下的文本块 bbox 列表（供算法 5）。
 
         复用 _ensure_text_data 已缓存的 get_text("dict") 结果，避免每页二次提取；
         未缓存时（理论上不会发生，_ensure_text_data 先于 build_process_plan）兜底按旧路径。
+
+        total_rotation: 由 build_process_plan 传入的"源页自带 /Rotate + 规划旋转"
+            总旋转角；不再从 current_plan 反查（构建中 current_plan 尚未就绪，
+            首次 open_pdf 时会是 None/旧值，导致带 /Rotate 页坐标不回正）。
         """
         if src_index is None or self.loader._fitz_doc is None:
             return None
@@ -376,13 +382,14 @@ class AppController(QObject):
             blocks = self.renderer.extract_text_blocks(page)
         else:
             blocks = text_data.get("blocks", [])
-        rotation = 0
-        if self.current_plan is not None:
-            for pp in self.current_plan.pages:
-                if not pp.is_blank and pp.source_page_info.original_index == src_index:
-                    rotation = pp.rotation
-                    break
-        cw, ch = page.rect.width, page.rect.height
+        rotation = (total_rotation or 0) % 360
+        # 内容 bbox 基于"未旋转坐标系"（get_text 输出与 /Rotate 无关）；
+        # 而 page.rect 对带 /Rotate 页返回"显示尺寸"（旋转后）。旋转 90/270 时
+        # 显示宽=内容高、显示高=内容宽，需还原内容尺寸再变换，否则坐标错乱。
+        if page.rotation in (90, 270):
+            cw, ch = page.rect.height, page.rect.width
+        else:
+            cw, ch = page.rect.width, page.rect.height
         out: list[tuple[float, float, float, float]] = []
         for b in blocks:
             if not isinstance(b, dict) or b.get("type") != 0:
@@ -403,6 +410,23 @@ class AppController(QObject):
             out.append((x0, y0, x1, y1))
         return out or None
 
+    def _pixel_overlap_checker(
+        self, src_index: int, num_rect_pt: tuple[float, float, float, float]
+    ) -> bool:
+        """像素级重叠检测回调：渲染页码区域小矩形，检测非白色像素。
+
+        覆盖扫描件（整页图片时文本块为空，文本块检测 miss）；空白页跳过。
+        """
+        if src_index is None or self.loader._fitz_doc is None:
+            return False
+        try:
+            page = self.loader._fitz_doc[src_index]
+            if page.rect.is_empty:
+                return False
+        except Exception:
+            return False
+        return engine.detect_pixel_overlap(page, num_rect_pt)
+
     def rebuild_plan(self) -> None:
         """重新规划并通知 UI 刷新。"""
         if self.load_result is None:
@@ -414,6 +438,7 @@ class AppController(QObject):
             page_text_data=text_data,
             text_width_calculator=self._text_width_calculator,
             text_block_calculator=self._text_block_calculator,
+            pixel_overlap_checker=self._pixel_overlap_checker,
             blank_configs=self._blank_configs,
         )
         self.current_plan = plan
