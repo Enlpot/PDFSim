@@ -30,7 +30,7 @@ _exclude_qt = [
 ]
 
 a = Analysis(
-    ['_verify/verify_bundled.py'],
+    ['src/tests/verify_bundled.py'],
     pathex=['src'],
     binaries=binaries,
     datas=datas,
