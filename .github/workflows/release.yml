@@ -13,6 +13,8 @@ permissions:
 jobs:
   build-and-release:
     runs-on: windows-latest
+    env:
+      PYTHONIOENCODING: utf-8  # Windows runner 默认 cp1252，避免中文输出崩溃
     steps:
       - uses: actions/checkout@v4
         with:

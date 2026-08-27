@@ -11,6 +11,13 @@ import io
 import os
 import sys
 
+# CI / 非 UTF-8 控制台（如 Windows cp1252）下中文 print 不崩溃
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 import pikepdf
 import pymupdf
 
