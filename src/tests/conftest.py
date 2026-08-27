@@ -34,9 +34,16 @@ def gen_samples_script() -> Path:
 # ---------------------------------------------------------------------------
 @pytest.fixture(scope="session")
 def ui_fonts():
-    """加载系统中文字体，保证 UI 截图/渲染正常。"""
-    from PySide6.QtGui import QFontDatabase
+    """加载系统中文字体，保证 UI 截图/渲染正常。
 
+    先确保 QApplication 存在再加载字体：无 app 时调用
+    QFontDatabase.addApplicationFont 在无桌面会话环境（CI runner）会触发
+    Qt native crash（access violation，try/except 无法捕获）。
+    """
+    from PySide6.QtGui import QFontDatabase
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
     for fp in (r"C:\Windows\Fonts\msyh.ttc", r"C:\Windows\Fonts\simsun.ttc"):
         try:
             QFontDatabase.addApplicationFont(fp)
