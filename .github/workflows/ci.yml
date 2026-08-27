@@ -21,7 +21,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt pytest pytest-cov
+          pip install -r requirements.txt
 
       - name: Generate test samples
         # 大性能样本（sample_800pages.pdf）不入库，CI 前先全量生成

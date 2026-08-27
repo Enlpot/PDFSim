@@ -27,7 +27,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt pyinstaller pytest pytest-cov
+          pip install -r requirements.txt pyinstaller
 
       - name: Generate test samples
         run: python src/tests/samples/gen_samples.py
