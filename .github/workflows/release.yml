@@ -49,6 +49,12 @@ jobs:
         run: python build.py
         shell: bash
 
+      - name: Generate 使用说明书 PDF
+        # 用 windows 平台（runner 有桌面会话，offscreen 下 Qt 找不到字体，中文无法渲染）
+        run: python scripts/md2pdf.py "docs/使用说明书.md" "docs/使用说明书.pdf"
+        env:
+          QT_QPA_PLATFORM: windows
+
       - name: Compute SHA-256
         run: python -c "import hashlib;print(hashlib.sha256(open('dist/PDFSim.exe','rb').read()).hexdigest())" > dist/PDFSim.exe.sha256
         shell: bash
@@ -69,6 +75,7 @@ jobs:
             echo "- 全量测试：pytest src/tests 通过"
             echo "- 打包自检（PDFSim_selftest）：核心功能逐项验证通过"
             echo "- SHA-256 见附件 PDFSim.exe.sha256"
+            echo "- 使用说明书见附件 PDFSim使用说明书.pdf"
           } > notes.md
           cat notes.md
         shell: bash
@@ -77,7 +84,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${{ github.ref_name }}" dist/PDFSim.exe dist/PDFSim.exe.sha256 \
+          cp "docs/使用说明书.pdf" "dist/PDFSim使用说明书.pdf"
+          gh release create "${{ github.ref_name }}" dist/PDFSim.exe dist/PDFSim.exe.sha256 "dist/PDFSim使用说明书.pdf" \
             --title "PDFSim ${{ github.ref_name }}" \
             --notes-file notes.md
         shell: bash
