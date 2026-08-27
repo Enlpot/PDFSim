@@ -1,7 +1,0 @@
-﻿feat(overlap): 页码重叠检测优化 - 像素检测覆盖扫描件 + UI角标 + 收集所有重叠 + 旋转坐标一致性
-
-- engine: detect_overlap 返回所有重叠区域 list；新增 detect_pixel_overlap（渲染页码区域小矩形，非白色像素总数阈值，<1ms）；build_process_plan 新增 pixel_overlap_checker 参数 + 文本块/像素混合检测
-- app_controller: 新增 _pixel_overlap_checker；_text_block_calculator 改用总旋转(source_rotation+planned_rotation)参数传入，修复 current_plan 时序缺陷与 fitz page.rect 显示尺寸问题
-- thumbnail/book_view: 重叠页红色"叠"角标；styles 新增 COLOR_OVERLAP_BADGE
-- 新增 test_overlap_pixel（像素/混合/旋转坐标/UI角标 13 用例）+ 适配 test_engine
-- docs: 新增重叠检测优化报告
