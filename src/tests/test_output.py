@@ -88,7 +88,8 @@ class TestOutput:
         try:
             fonts = doc[0].get_fonts()
             # 元组: (xref, ext, type, basefont, name, encoding)；嵌入 TTF → ext == 'ttf'
-            assert any(f[4] == "F0" and f[1] == "ttf" for f in fonts), f"未找到嵌入字体 F0: {fonts}"
+            # 字体名用 "PDFSimFont"（Bug 修复：原 "F0" 与源 PDF 字体名冲突）
+            assert any(f[4] == "PDFSimFont" and f[1] == "ttf" for f in fonts), f"未找到嵌入字体 PDFSimFont: {fonts}"
         finally:
             doc.close()
 

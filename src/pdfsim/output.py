@@ -28,8 +28,13 @@ from pdfsim.models import (
 )
 
 _DEFAULT_FONT = r"C:\Windows\Fonts\times.ttf"
-_FONTNAME_EMBED = "F0"      # 嵌入字体名（非保留名）
-_FONTNAME_BASE14 = "tiro"   # 回退 Base-14 Times-Roman
+# 嵌入字体名：必须避开源 PDF 页面已有的字体名（通常为 F0-Fn）。
+# Bug 修复：原硬编码 "F0" 与源 PDF 内 62 页自带的 /F0 字体冲突，
+# PyMuPDF insert_font 检测到页面已有同名 F0 时走复用分支 get_char_widths，
+# 但该 F0 继承自源 PDF、无 FontFile 流，导致 'NoneType' object has no attribute 'm_internal'。
+# "PDFSimFont" 不匹配 F\d+ 模式，源 PDF 不可能存在，永远走"新建嵌入"分支。
+_FONTNAME_EMBED = "PDFSimFont"
+_FONTNAME_BASE14 = "times-roman"  # 回退 Base-14 Times-Roman（标准名）
 
 
 @dataclass

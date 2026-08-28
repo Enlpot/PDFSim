@@ -111,3 +111,40 @@
 - `_OutputWorker` 内 `PDFOutput()` 为线程内新建实例（不共享主线程实例，避免跨线程访问）；`output.py` 无任何 UI 依赖，线程安全。
 - 输出进度为阶段式（10/50/90），非逐页百分比；逐页进度需在 `_draw_page_numbers` 循环内加回调，当前按提示语三档实现。
 - 性能样本 `sample_800pages.pdf`（67.4MB）不入库（既有 gitignore），CI/本地跑全量前由 `gen_samples.py` 自动生成；本次本地已生成用于回归验证，未提交。
+
+---
+
+## 7. 追加修复（v0.7.1）：字体名冲突导致 m_internal 报错
+
+> 现象（用户实测）：92MB / 708 页扫描版 PDF（输出 839 物理页），在"绘制页码"阶段报
+> ` 'NoneType' object has no attribute 'm_internal' `，输出失败。
+
+### 7.1 根因定位
+
+用真实文件逐页复现，精确定位：
+
+- 失败页：**物理第 211 页**（源 PDF original_index=146），非空白、无旋转。
+- 同一页**不指定 fontname** 的 insert_font(fontfile=...) 却成功。
+- 检查源 PDF：**62 个源页自带字体资源名 /F0**（第 211 页源页正含 /F1 /F2 /F0）。
+
+**根因链**：输出模块嵌入页码字体时硬编码 ` fontname="F0" `。当目标页（继承自源 PDF）已自带名为 ` F0 ` 的字体时，PyMuPDF ` insert_font(fontname="F0") ` 走**复用分支**：` CheckFont(page,"F0") ` 命中 → ` CheckFontInfo(doc, xref) ` 未命中 → 调用 ` doc.get_char_widths(xref) ` 为该 xref 构建字体宽度表 → ` JM_get_fontbuffer(pdf, xref) ` 读到的字体数据为空（该 F0 继承自源 PDF、无 FontFile 流）→ ` buf ` 为 None → 访问 ` buf.m_internal ` 报 ` AttributeError `。
+
+即：**硬编码 ` F0 ` 恰与源 PDF 页面字体名（F0-Fn 常规命名）冲突**，文本页样本无此字体名故从未触发，图片/工程扫描件常见 F0-Fn 命名故暴露。
+
+### 7.2 修复
+
+` src/pdfsim/output.py `：嵌入字体名 ` "F0" ` → ` "PDFSimFont" `（不匹配 ` F\d+ ` 模式，源 PDF 不可能存在，` insert_font ` 永远走"新建嵌入"分支，彻底规避冲突）。回退 Base-14 名 ` "tiro" ` → ` "times-roman" `（标准名）。
+
+### 7.3 验证
+
+- **真实文件**（92MB/708 页→839 物理页）：输出成功，页数校验 839/839，源文件 SHA-256 未变；抽查页码正确（物理 101→92、211→147、501→370、839→708，递增符合规划；背面/空白页无页码符合装订规则）。
+- **新增回归测试** ` test_output_source_page_with_F0_font `：构造含 ` /F0 ` 字体名的页面 → 输出成功且页码写出。
+- **全量回归**：` 440 passed, 1 skipped `。
+
+### 7.4 涉及文件
+
+| 文件 | 改动 |
+|------|------|
+| ` src/pdfsim/output.py ` | 嵌入字体名 ` F0→PDFSimFont `、回退名 ` tiro→times-roman ` |
+| ` src/tests/test_output.py ` | ` test_font_embedded ` 断言更新为 ` PDFSimFont ` |
+| ` src/tests/test_output_large_fix.py ` | 新增含 F0 字体名回归测试 |

@@ -129,6 +129,36 @@ class TestOutputTempFile:
         # 无残留临时文件
         assert _temp_files(str(tmp_path)) == []
 
+    def test_output_source_page_with_F0_font(self, tmp_path):
+        """回归：源 PDF 某页自带 /F0 字体名时，输出不报 m_internal（Bug 修复）。
+
+        根因：嵌入字体名硬编码 "F0" 与源 PDF 页面字体名冲突，PyMuPDF insert_font
+        走复用分支 get_char_widths 读不到 FontFile → 'NoneType' object has no
+        attribute 'm_internal'。改为独特名 "PDFSimFont" 后不再冲突。
+        """
+        import pikepdf
+
+        src = str(tmp_path / "f0conflict.pdf")
+        pdf = pikepdf.Pdf.new()
+        pg = pdf.add_blank_page(page_size=(595, 842))
+        # 注入名为 /F0 的字体资源（Type1 Helvetica，无 FontFile 流），复现冲突场景
+        fobj = pdf.make_indirect(
+            pikepdf.Dictionary(Type="/Font", Subtype="/Type1", BaseFont="/Helvetica")
+        )
+        res = pg.obj.get("/Resources", pikepdf.Dictionary())
+        res["/Font"] = pikepdf.Dictionary({"/F0": fobj})
+        pg.obj["/Resources"] = res
+        pdf.save(src)
+        pdf.close()
+
+        r, plan, config = _build_plan(src, tmp_path)
+        res = PDFOutput().output(src, plan, config)
+        assert res.success
+        # 页码仍正确写出
+        with pymupdf.open(res.output_path) as d:
+            assert d.page_count == len(plan.pages)
+            assert d[0].get_text().strip()  # 首页应有页码文字
+
 
 
 # ---------------------------------------------------------------------------
