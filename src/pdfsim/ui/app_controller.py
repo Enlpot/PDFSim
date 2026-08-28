@@ -828,6 +828,31 @@ class AppController(QObject):
         self.config.output_suffix = suffix
         self._after_change()
 
+    def import_config_to_current(self, src_config_path: str) -> bool:
+        """导入已有配置文件到当前 PDF（"导入配置"功能）。
+
+        整体读取源配置（global + pages + computed），把 source_file 替换为
+        当前 PDF 绝对路径并写入当前 PDF 旁的配置文件，随后重新加载并应用。
+        返回 True=成功；未打开 PDF / 源文件不可读返回 False。
+        """
+        if self.pdf_path is None:
+            return False
+        written = self.config_mgr.import_config(src_config_path, self.pdf_path)
+        if written is None:
+            return False
+        # 重新加载配置并应用到 source_pages（与重新打开该 PDF 行为一致）
+        self.config = self.config_mgr.load_config(self.pdf_path)
+        self.page_configs = self.config_mgr.load_page_configs(self.pdf_path)
+        self._extract_blank_configs()
+        self.config_mgr.apply_page_configs(self.source_pages, self.page_configs)
+        for p in self.source_pages:
+            if is_a3(p):
+                p.marks.add(PageMark.FRONT)
+        self._prewarm_computed()
+        self.rebuild_plan()
+        self.status_message.emit("已导入配置")
+        return True
+
     # ------------------------------------------------------------------
     # 选中页
     # ------------------------------------------------------------------

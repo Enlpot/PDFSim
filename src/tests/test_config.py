@@ -156,6 +156,65 @@ class TestGlobalDefault:
         assert loaded.global_style.font == "Times New Roman"
 
 
+class TestImportConfig:
+    """导入已有配置文件到目标 PDF（source_file 替换为当前 PDF 绝对路径）。"""
+
+    def _make_src(self, tmp_path, target_name="合同.pdf"):
+        """构造一份源配置（旧版本风格：source_file 为死路径）。"""
+        src = tmp_path / "source.pagerconfig.json"
+        src.write_text(
+            '{"version": 2, "source_file": "D:\\\\@old\\\\旧文档.pdf",'
+            ' "global": {"start_page_number": 7,'
+            '   "style": {"font": "SimSun", "fontsize_pt": 11.0}},'
+            ' "pages": [{"original_index": 0, "marks": ["signature"]}]}',
+            encoding="utf-8",
+        )
+        return str(src)
+
+    def test_import_replaces_source_file(self, cfg_mgr, tmp_path, fake_pdf):
+        """导入后：写入目标 PDF 旁配置文件，source_file 替换为目标 PDF 绝对路径，
+        全局与页面级配置完整保留。"""
+        src = self._make_src(tmp_path)
+        written = cfg_mgr.import_config(src, fake_pdf)
+        assert written == cfg_mgr.config_path_for(fake_pdf)
+        assert os.path.isfile(written)
+        loaded = cfg_mgr.load_config(fake_pdf)
+        assert loaded.start_page_number == 7
+        assert loaded.global_style.font == "SimSun"
+        pcs = cfg_mgr.load_page_configs(fake_pdf)
+        assert 0 in pcs and PageMark.SIGNATURE in pcs[0].marks
+        # source_file 已替换
+        import json
+
+        with open(written, encoding="utf-8") as f:
+            data = json.load(f)
+        assert data["source_file"] == os.path.abspath(fake_pdf)
+
+    def test_import_missing_returns_none(self, cfg_mgr, tmp_path, fake_pdf):
+        assert cfg_mgr.import_config(str(tmp_path / "none.json"), fake_pdf) is None
+
+    def test_import_bad_version_returns_none(self, cfg_mgr, tmp_path, fake_pdf):
+        src = tmp_path / "bad.json"
+        src.write_text('{"version": 999, "source_file": "x"}', encoding="utf-8")
+        assert cfg_mgr.import_config(str(src), fake_pdf) is None
+
+    def test_import_v1_migrates_version(self, cfg_mgr, tmp_path, fake_pdf):
+        src = tmp_path / "v1.json"
+        src.write_text(
+            '{"version": 1, "source_file": "D:\\\\@old\\\\旧.pdf",'
+            ' "global": {"start_page_number": 3}}',
+            encoding="utf-8",
+        )
+        written = cfg_mgr.import_config(str(src), fake_pdf)
+        assert written is not None
+        assert cfg_mgr.load_config(fake_pdf).start_page_number == 3
+
+    def test_import_corrupted_returns_none(self, cfg_mgr, tmp_path, fake_pdf):
+        src = tmp_path / "bad.json"
+        src.write_text("{oops", encoding="utf-8")
+        assert cfg_mgr.import_config(str(src), fake_pdf) is None
+
+
 class TestVersionAndSourceValidation:
     def test_version_mismatch_ignored(self, cfg_mgr, fake_pdf):
         path = cfg_mgr.config_path_for(fake_pdf)

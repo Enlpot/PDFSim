@@ -115,6 +115,9 @@ class MainWindow(QMainWindow):
         self.act_settings = QAction("全局设置…", self)
         self.act_settings.triggered.connect(self.on_global_settings)
         tool_menu.addAction(self.act_settings)
+        self.act_import_cfg = QAction("导入配置…", self)
+        self.act_import_cfg.triggered.connect(self.on_import_config)
+        tool_menu.addAction(self.act_import_cfg)
         tool_menu.addSeparator()
         self.act_output = QAction("输出", self)
         self.act_output.setShortcut("Ctrl+S")
@@ -302,6 +305,31 @@ class MainWindow(QMainWindow):
     def on_global_settings(self) -> None:
         dlg = GlobalSettingsDialog(self.controller, self)
         dlg.exec()
+
+    def on_import_config(self) -> None:
+        """导入已有配置文件到当前 PDF（source_file 自动替换为当前 PDF 路径）。"""
+        if self.controller.pdf_path is None:
+            QMessageBox.information(self, "提示", "请先打开一个 PDF。")
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择要导入的配置文件",
+            "",
+            "配置文件 (*.pagerconfig.json);;所有文件 (*)",
+        )
+        if not path:
+            return
+        if self.controller.import_config_to_current(path):
+            QMessageBox.information(
+                self,
+                "导入成功",
+                "已导入配置并应用到当前 PDF。\n"
+                "（source_file 已自动替换为当前 PDF 路径）",
+            )
+        else:
+            QMessageBox.warning(
+                self, "导入失败", "无法导入该配置文件（文件缺失、损坏或版本非法）。"
+            )
 
     def on_output(self) -> None:
         """启动后台输出（方案 C：大 PDF 不阻塞 UI），显示进度对话框。"""

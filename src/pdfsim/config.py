@@ -376,6 +376,29 @@ class ConfigManager:
         self._atomic_write(p, data)
         return p
 
+    def import_config(self, src_config_path: str, target_pdf_path: str) -> str | None:
+        """导入已有配置文件到目标 PDF（"导入配置"功能）。
+
+        整体读取源配置（global + pages + computed），把其中 source_file 的
+        旧绝对路径（死路径）替换为目标 PDF 的绝对路径，写入目标 PDF 旁的
+        配置文件（version 统一为当前版本）。返回写入路径；源文件缺失 /
+        损坏 / 版本非法 / 非对象返回 None。
+        """
+        try:
+            with open(src_config_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        if data.get("version") not in (1, 2):
+            return None
+        data["version"] = CONFIG_VERSION  # v1 旧配置统一迁移为当前版本
+        data["source_file"] = os.path.abspath(target_pdf_path)  # 替换死路径
+        target_path = self.config_path_for(target_pdf_path)
+        self._atomic_write(target_path, data)
+        return target_path
+
     def save_config(self, pdf_path: str, config: DocumentConfig) -> None:
         """保存全局配置（保留已有页面级配置）。"""
         path = self.config_path_for(pdf_path)

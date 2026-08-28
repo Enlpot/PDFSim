@@ -73,3 +73,74 @@ def test_save_default_keeps_current_doc_untouched(qtbot, monkeypatch, tmp_path):
     assert controller.config.start_page_number == 100
     # 但全局默认已更新
     assert ConfigManager().load_global_default().start_page_number == 3
+
+
+# ---------------------------------------------------------------------------
+# 导入配置（import_config_to_current）
+# ---------------------------------------------------------------------------
+def _src_config(tmp_path, start=9, marks="") -> str:
+    src = tmp_path / "source.pagerconfig.json"
+    pages = (
+        f', "pages": [{{"original_index": 0, "marks": [{marks}]}}]'
+        if marks else ', "pages": []'
+    )
+    src.write_text(
+        '{"version": 2, "source_file": "D:\\\\@old\\\\旧文档.pdf",'
+        f' "global": {{"start_page_number": {start},'
+        '   "style": {"font": "SimHei", "fontsize_pt": 10.0}}'
+        f'{pages}}}',
+        encoding="utf-8",
+    )
+    return str(src)
+
+
+def _copy_sample(samples_dir, tmp_path, name="sample_a4_portrait.pdf") -> str:
+    import shutil
+
+    dst = tmp_path / name
+    shutil.copyfile(str(samples_dir / name), dst)
+    return str(dst)
+
+
+def test_import_config_to_current_applies(make_window, tmp_path, samples_dir):
+    """导入配置到当前 PDF：source_file 替换、全局+页面级配置应用、写入 PDF 旁。"""
+    import json
+    import os
+
+    from pdfsim.models import PageMark
+
+    dst = _copy_sample(samples_dir, tmp_path)
+    w = make_window()
+    c = w.controller
+    c.open_pdf(dst, "")
+    assert c.import_config_to_current(
+        _src_config(tmp_path, start=9, marks='"signature"')
+    ) is True
+    # 全局设置应用
+    assert c.config.start_page_number == 9
+    assert c.config.global_style.font == "SimHei"
+    assert c.config.global_style.fontsize_pt == 10.0
+    # 页面级标记应用
+    assert PageMark.SIGNATURE in c.source_pages[0].marks
+    # 配置文件已写入目标 PDF 旁，且 source_file 替换为当前 PDF
+    cfg_path = os.path.splitext(dst)[0] + ".pagerconfig.json"
+    assert os.path.isfile(cfg_path)
+    with open(cfg_path, encoding="utf-8") as f:
+        data = json.load(f)
+    assert data["source_file"] == os.path.abspath(dst)
+
+
+def test_import_config_requires_open(make_window, tmp_path):
+    """未打开 PDF 时导入返回 False。"""
+    w = make_window()
+    c = w.controller
+    assert c.import_config_to_current(_src_config(tmp_path)) is False
+
+
+def test_import_config_bad_source_returns_false(make_window, tmp_path, samples_dir):
+    """源配置缺失/损坏 → 导入失败返回 False。"""
+    dst = _copy_sample(samples_dir, tmp_path)
+    w = make_window()
+    c = w.controller
+    c.open_pdf(dst, "")
+    assert c.import_config_to_current(str(tmp_path / "none.json")) is False
