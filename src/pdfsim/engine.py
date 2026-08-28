@@ -604,6 +604,40 @@ def _rect_overlaps(
     return False
 
 
+def _detect_hits(
+    pp: ProcessedPage,
+    style: PageNumberStyle,
+    text_width_pt: float,
+    text_block_calculator,
+    pixel_overlap_checker,
+) -> tuple[list, bool]:
+    """文本块 + 像素混合检测，返回 (text_hits, pixel_hit)。
+
+    文本块检测收集所有重叠区域；未命中时像素检测补充（覆盖扫描件）。
+    性能：单遍检测结果供算法 4.5/5 复用，避免每页重复检测。
+    """
+    src_idx = pp.source_page_info.original_index
+    num_rect = _compute_num_rect(pp, style, text_width_pt)
+    text_hits: list[tuple[float, float, float, float]] = []
+    if text_block_calculator is not None and src_idx is not None:
+        total_rotation = (pp.source_page_info.source_rotation + pp.rotation) % 360
+        try:
+            blocks = text_block_calculator(src_idx, total_rotation)
+        except TypeError:
+            blocks = text_block_calculator(src_idx)
+        if blocks:
+            text_hits = detect_overlap(num_rect, blocks)
+    pixel_hit = False
+    if (
+        not text_hits
+        and pixel_overlap_checker is not None
+        and src_idx is not None
+        and not pp.is_blank
+    ):
+        pixel_hit = bool(pixel_overlap_checker(src_idx, num_rect))
+    return text_hits, pixel_hit
+
+
 def _move_to_edge(
     pp: ProcessedPage,
     style: PageNumberStyle,
@@ -799,29 +833,41 @@ def build_process_plan(
         pp.number_point = pt
         pp.number_position = _base_position(pp, style)
 
-    # 算法 4.5：重叠自动调整（位置计算后、最终重叠检测前）
+    # 第一遍重叠检测（单遍，结果缓存供算法 4.5/5 复用）：
+    # 未重叠页只需检测一次，避免 800 页大文档每页重复检测的性能放大。
+    detect_cache: dict[int, tuple] = {}
+    for pp in processed:
+        if pp.number_text is None:
+            continue
+        style = _effective_style(pp, config)
+        text_w = _width(pp.number_text, style.fontsize_pt)
+        num_rect = _compute_num_rect(pp, style, text_w)
+        text_hits, pixel_hit = _detect_hits(
+            pp, style, text_w, text_block_calculator, pixel_overlap_checker
+        )
+        detect_cache[pp.physical_index] = (text_hits, pixel_hit, num_rect)
+
+    # 算法 4.5：重叠自动调整（只处理重叠页）
     # 规则：向最近的角落移动（0.5mm/步，最小页边距 3mm）→ 仍重叠则缩小字号
     # （每级 1pt，最多 config.auto_shrink_levels 级）→ 都不行保留原位置并报重叠。
     # 只调整重叠的那一页（effective_style 副本），不影响其他页。
     if config.auto_adjust_overlap:
         for pp in processed:
-            if pp.number_text is None:
+            entry = detect_cache.get(pp.physical_index)
+            if entry is None:
                 continue
+            text_hits, pixel_hit, _num_rect = entry
+            if not (text_hits or pixel_hit):
+                continue  # 无重叠，不调整
             # 旋转页（总旋转 ≠ 0，含源页自带 /Rotate）坐标变换复杂，第一版暂不自动调整
             if (pp.source_page_info.source_rotation + pp.rotation) % 360 != 0:
                 continue
-            if pp.is_blank:       # 空白页无内容可重叠
+            if pp.is_blank:  # 空白页无内容可重叠
                 continue
             src_idx = pp.source_page_info.original_index
             if src_idx is None:
                 continue
             style = _effective_style(pp, config)
-            text_w = _width(pp.number_text, style.fontsize_pt)
-            if not _rect_overlaps(
-                pp, src_idx, _compute_num_rect(pp, style, text_w),
-                text_block_calculator, pixel_overlap_checker,
-            ):
-                continue  # 无重叠，不调整
             overlap_fn = (
                 lambda rect: _rect_overlaps(
                     pp, src_idx, rect, text_block_calculator, pixel_overlap_checker
@@ -842,48 +888,23 @@ def build_process_plan(
                     pp, new_style, pp.physical_index, text_w2
                 )
                 pp.number_position = _base_position(pp, new_style)
+                # 用调整后的 style 重新检测并更新缓存（算法 5 用最新结果）
+                th2, ph2 = _detect_hits(
+                    pp, new_style, text_w2, text_block_calculator, pixel_overlap_checker
+                )
+                detect_cache[pp.physical_index] = (
+                    th2, ph2, _compute_num_rect(pp, new_style, text_w2)
+                )
             else:
                 pp.overlap_adjust_result = result  # 失败：保留原位置，仍报重叠
 
-    # 算法 5：重叠检测（最终；自动调整后的 effective_style 参与检测）
+    # 算法 5：重叠检测警告（复用第一遍/调整后缓存结果）
     warnings: list[OverlapWarning] = []
     for pp in processed:
-        if pp.number_text is None:
+        entry = detect_cache.get(pp.physical_index)
+        if entry is None:
             continue
-        style = _effective_style(pp, config)
-        text_w = _width(pp.number_text, style.fontsize_pt)
-        pt = pp.number_point
-        if pt is None:
-            continue
-        src_idx = pp.source_page_info.original_index
-        num_rect = _compute_num_rect(pp, style, text_w)
-
-        # 5a：文本块检测（收集所有重叠）
-        text_hits: list[tuple[float, float, float, float]] = []
-        if text_block_calculator is not None and src_idx is not None:
-            # 总旋转（源页自带 /Rotate + 规划旋转），传给回调做坐标变换，
-            # 与 calculate_number_position 的 total_rotation 一致。
-            total_rotation = (
-                pp.source_page_info.source_rotation + pp.rotation
-            ) % 360
-            try:
-                blocks = text_block_calculator(src_idx, total_rotation)
-            except TypeError:
-                blocks = text_block_calculator(src_idx)
-            if blocks:
-                text_hits = detect_overlap(num_rect, blocks)
-
-        # 5b：像素检测（补充，覆盖扫描件——整页图片时文本块为空）
-        pixel_hit = False
-        if (
-            not text_hits
-            and pixel_overlap_checker is not None
-            and src_idx is not None
-            and not pp.is_blank
-        ):
-            pixel_hit = bool(pixel_overlap_checker(src_idx, num_rect))
-
-        # 任一命中 → 报重叠警告
+        text_hits, pixel_hit, num_rect = entry
         if text_hits or pixel_hit:
             overlap_rect = text_hits[0] if text_hits else num_rect
             warnings.append(OverlapWarning(
