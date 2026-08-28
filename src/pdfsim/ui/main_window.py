@@ -145,6 +145,12 @@ class MainWindow(QMainWindow):
         self.tb_next = tb.addAction("下一页 ▶")
         self.tb_next.triggered.connect(self.book_view.page_next)
         tb.addSeparator()
+        # 书视图框选放大（任务：书视图放大）——checkable 切换放大模式
+        self.tb_zoom = tb.addAction("放大")
+        self.tb_zoom.setCheckable(True)
+        self.tb_zoom.toggled.connect(self.book_view.set_zoom_mode)
+        self.book_view.zoom_mode_changed.connect(self.tb_zoom.setChecked)
+        tb.addSeparator()
         self.tb_output = tb.addAction("输出")
         self.tb_output.triggered.connect(self.on_output)
         self.tb_report = tb.addAction("报告")

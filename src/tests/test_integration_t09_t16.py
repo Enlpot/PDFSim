@@ -292,7 +292,7 @@ class TestT16_RotationOverride:
         # 定位其物理页（phys1）
         phys = next(pp.physical_index for pp in c.current_plan.pages
                     if not pp.is_blank and pp.source_page_info.original_index == oi)
-        assert c.current_plan.pages[phys - 1].rotation == 0  # 自动检测：样本文字水平正向 → 不旋转
+        assert c.current_plan.pages[phys - 1].rotation == 90  # 自动检测：A4横向+正面文字 → 两步法必须旋转 90°
         c.select_physical(phys)
         qtbot.wait(10)
         panel = w.config_panel

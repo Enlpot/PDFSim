@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from enum import Enum
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QRect, QSize, Qt, Signal
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -18,7 +18,7 @@ from PySide6.QtGui import (
     QPen,
     QPixmap,
 )
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QRubberBand, QWidget
 
 from pdfsim.ui import dialogs
 from pdfsim.ui.styles import (
@@ -44,12 +44,21 @@ class BookViewState(Enum):
 class BookView(QWidget):
     """书视图。通过 controller 读取规划结果并渲染。"""
 
+    # 框选放大模式切换信号（main_window 工具栏按钮同步用，避免双向死循环）
+    zoom_mode_changed = Signal(bool)
+
     def __init__(self, controller=None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.controller = controller
         self.setMinimumSize(200, 200)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setAutoFillBackground(False)
+
+        # 框选放大模式（任务：书视图放大）
+        self._zoom_mode = False            # 框选放大模式是否开启
+        self._rubber_band: QRubberBand | None = None
+        self._rubber_origin: QRect | None = None
+        self._zoom_rect_widget: QRect | None = None  # 框选区域（widget 坐标）
 
     # ------------------------------------------------------------------
     # 状态机计算
@@ -94,6 +103,22 @@ class BookView(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.fillRect(self.rect(), QColor(COLOR_BOOK_BG))
 
+        zr = self._zoom_rect_widget
+        if zr is not None and not zr.isEmpty():
+            # 框选放大：把 zr（widget 坐标）区域放大填满整个 widget。
+            # 内容绘制逻辑完全复用（角标/页码预览一并放大），仅套 painter 变换。
+            painter.save()
+            scale = min(self.width() / zr.width(), self.height() / zr.height())
+            painter.translate(-zr.x() * scale, -zr.y() * scale)
+            painter.scale(scale, scale)
+            painter.setClipRect(zr)  # 世界坐标 clip（随变换映射到 widget 全区域）
+            self._paint_content(painter)
+            painter.restore()
+        else:
+            self._paint_content(painter)
+
+    def _paint_content(self, painter: QPainter) -> None:
+        """绘制书视图内容（布局 + 页面 + 角标 + 页码预览 + 选择提示）。"""
         pages, highlighted = self.layout_pages()
         if not pages:
             self._paint_empty(painter)
@@ -338,7 +363,65 @@ class BookView(QWidget):
         self._move(delta)
         event.accept()
 
+    # ------------------------------------------------------------------
+    # 框选放大
+    # ------------------------------------------------------------------
+    def set_zoom_mode(self, checked: bool) -> None:
+        """开启/关闭框选放大模式（工具栏"放大"按钮切换）。"""
+        self._zoom_mode = bool(checked)
+        if not checked:
+            self._zoom_rect_widget = None
+            if self._rubber_band is not None:
+                self._rubber_band.hide()
+            self.update()
+        self.zoom_mode_changed.emit(self._zoom_mode)
+
+    def zoom_rect(self) -> QRect | None:
+        """当前放大区域（widget 坐标）；None=未放大。"""
+        return self._zoom_rect_widget
+
+    def mousePressEvent(self, event):  # noqa: N802
+        if self._zoom_mode and event.button() == Qt.MouseButton.LeftButton:
+            self._rubber_origin = event.position().toPoint()
+            if self._rubber_band is None:
+                self._rubber_band = QRubberBand(QRubberBand.Shape.Rectangle, self)
+            self._rubber_band.setGeometry(QRect(self._rubber_origin, QSize()))
+            self._rubber_band.show()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):  # noqa: N802
+        if self._zoom_mode and self._rubber_band is not None:
+            self._rubber_band.setGeometry(
+                QRect(self._rubber_origin, event.position().toPoint()).normalized()
+            )
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):  # noqa: N802
+        if self._zoom_mode and self._rubber_band is not None:
+            rect = self._rubber_band.geometry()
+            self._rubber_band.hide()
+            # 框选太小（<10px）忽略，不当放大处理
+            if rect.width() > 10 and rect.height() > 10:
+                self._zoom_rect_widget = rect
+                self.update()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
     def keyPressEvent(self, event):  # noqa: N802
+        if event.key() == Qt.Key.Key_Escape and self._zoom_mode:
+            self._zoom_mode = False
+            self._zoom_rect_widget = None
+            if self._rubber_band is not None:
+                self._rubber_band.hide()
+            self.update()
+            self.zoom_mode_changed.emit(False)
+            event.accept()
+            return
         if event.key() == Qt.Key.Key_Right or event.key() == Qt.Key.Key_Down:
             self._move(1)
             event.accept()

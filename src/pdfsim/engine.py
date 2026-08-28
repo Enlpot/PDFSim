@@ -257,21 +257,37 @@ def plan_page_numbers(
 # ---------------------------------------------------------------------------
 # 算法 3：页面旋转
 # ---------------------------------------------------------------------------
-def detect_text_rotation(page_text_data: dict) -> int:
-    """文字方向检测：返回让主导文字朝右所需的旋转角（0/90/180/270）。
+def _rotate_dir(dir_tuple: tuple, rotation: int) -> tuple:
+    """对方向向量施加顺时针旋转。"""
+    x, y = dir_tuple
+    r = rotation % 360
+    if r == 0:
+        return (x, y)
+    if r == 90:
+        return (y, -x)
+    if r == 180:
+        return (-x, -y)
+    if r == 270:
+        return (-y, x)
+    return (x, y)
 
-    原理：统计页面上各 line 的 dir 向量（按字符数加权），把方向量化到
-    4 个主方向（PDF 文本 dir 可能有微小浮点误差，直接比较 exact match 不可靠，
-    用"水平/垂直哪个分量大"归类），找到占主导地位的文字方向，返回需要旋转的
-    角度使旋转后文字水平正向可读（dir=(1,0)，朝右）。
 
-    对应关系：
-      dir=(1, 0)   → 已朝右，不旋转 → 0
-      dir=(0, 1)   → 文字向上，顺时针 90° 后朝右 → 90
-      dir=(-1, 0)  → 文字反向，旋转 180° 后朝右 → 180
-      dir=(0, -1)  → 文字向下，逆时针 90° 后朝右 → 270
+def detect_text_rotation(page_text_data: dict, must_rotate: bool = False) -> int:
+    """文字方向检测（两步法，Bug 修复：旋转方向）。
 
-    无文字时返回 90（回退默认，UI 提示用户确认）。
+    步骤 1：选基础旋转——must_rotate 时用 90°（改页面方向），否则 0°。
+    步骤 2：对文字方向施加基础旋转，看是否变成正面/右面。
+      是 → 最终旋转 = 基础旋转；否 → 最终旋转 = 基础旋转 + 180°。
+
+    must_rotate=True：A3纵向→横向、A4横向→纵向（页面必须改方向）。
+    must_rotate=False：A3横向、A4纵向、其他尺寸（方向已对，只修正倒置）。
+
+    对应关系（dir 量化到 4 主方向，按字符数加权取主导）：
+      物理方向：正面 (1,0)、右面 (0,-1)、对面 (-1,0)、左面 (0,1)。
+      must_rotate=False：正面/右面 → 0°；对面/左面 → 180°。
+      must_rotate=True：正面/左面 → 90°；对面/右面 → 270°（90° 后正面/右面可读）。
+
+    无文字时返回基础旋转（must_rotate→90°；否则→0°）。
     输入：PyMuPDF `get_text("dict")` 的返回。
     """
     blocks = page_text_data.get("blocks", []) if isinstance(page_text_data, dict) else []
@@ -295,20 +311,19 @@ def detect_text_rotation(page_text_data: dict) -> int:
                 quantized = (0.0, 1.0 if dy > 0 else -1.0)
             dir_weight[quantized] = dir_weight.get(quantized, 0.0) + chars
 
+    base = 90 if must_rotate else 0
+
     if not dir_weight:
-        return 90  # 无文字 → 回退默认 90
+        return base  # 无文字 → 基础旋转（默认）
 
     dominant = max(dir_weight, key=dir_weight.get)
+    rotated = _rotate_dir(dominant, base)
 
-    if dominant == (1.0, 0.0):
-        return 0
-    if dominant == (0.0, 1.0):
-        return 90
-    if dominant == (-1.0, 0.0):
-        return 180
-    if dominant == (0.0, -1.0):
-        return 270
-    return 90  # fallback
+    # 正面 (1,0) 或 右面 (0,-1) → 可读
+    if rotated in ((1.0, 0.0), (0.0, -1.0)):
+        return base
+    else:
+        return (base + 180) % 360
 
 
 def plan_rotation(
@@ -316,25 +331,29 @@ def plan_rotation(
 ) -> tuple[int, tuple[float, float]]:
     """按判定表（技术方案 3.3.1）决定是否需要旋转与旋转后尺寸。
 
-    对需旋转页（A4 横向、A3 纵向）调用 detect_text_rotation 填充 detected_rotation。
+    两步法（旋转方向 Bug 修复）：所有页面类型都调用 detect_text_rotation——
+      A3 纵向 / A4 横向 → must_rotate=True（必须改方向：90°/270°）；
+      A3 横向 / A4 纵向 → must_rotate=False（方向已对，只修正倒置 180°）。
     返回 (detected_rotation, 旋转后尺寸 mm)；180° 与 0° 一样不交换宽高
     （由 _rotated_size 统一处理）。
     """
     w, h = page.width_mm, page.height_mm
-    if _approx(w, A3_WIDTH_MM) and _approx(h, A3_HEIGHT_MM):  # A3 纵向 → 需旋转
-        r = detect_text_rotation(page_text_data) if page_text_data is not None else 90
+    if _approx(w, A3_WIDTH_MM) and _approx(h, A3_HEIGHT_MM):  # A3 纵向 → 必须改方向
+        r = detect_text_rotation(page_text_data, must_rotate=True) if page_text_data else 90
         page.detected_rotation = r
         return r, _rotated_size(page, r)
-    if _approx(w, A3_HEIGHT_MM) and _approx(h, A3_WIDTH_MM):  # A3 横向 → 不旋转
-        page.detected_rotation = 0
-        return 0, (A3_WIDTH_MM, A3_HEIGHT_MM)
-    if _approx(w, A4_HEIGHT_MM) and _approx(h, A4_WIDTH_MM):  # A4 横向 → 需旋转
-        r = detect_text_rotation(page_text_data) if page_text_data is not None else 90
+    if _approx(w, A3_HEIGHT_MM) and _approx(h, A3_WIDTH_MM):  # A3 横向 → 方向已对，修倒置
+        r = detect_text_rotation(page_text_data, must_rotate=False) if page_text_data else 0
         page.detected_rotation = r
         return r, _rotated_size(page, r)
-    if _approx(w, A4_WIDTH_MM) and _approx(h, A4_HEIGHT_MM):  # A4 纵向 → 不旋转
-        page.detected_rotation = 0
-        return 0, (A4_WIDTH_MM, A4_HEIGHT_MM)
+    if _approx(w, A4_HEIGHT_MM) and _approx(h, A4_WIDTH_MM):  # A4 横向 → 必须改方向
+        r = detect_text_rotation(page_text_data, must_rotate=True) if page_text_data else 90
+        page.detected_rotation = r
+        return r, _rotated_size(page, r)
+    if _approx(w, A4_WIDTH_MM) and _approx(h, A4_HEIGHT_MM):  # A4 纵向 → 方向已对，修倒置
+        r = detect_text_rotation(page_text_data, must_rotate=False) if page_text_data else 0
+        page.detected_rotation = r
+        return r, _rotated_size(page, r)
     # 其他尺寸（D3）：不旋转
     page.detected_rotation = 0
     return 0, (w, h)
@@ -776,6 +795,7 @@ def build_process_plan(
     text_block_calculator=None,
     pixel_overlap_checker=None,
     blank_configs: dict[str, set[PageMark]] | None = None,
+    rotation_cache: dict[int, int] | None = None,
 ) -> ProcessPlan:
     """串联算法 1→3→2→4→5，产出完整 ProcessPlan。
 
@@ -787,6 +807,9 @@ def build_process_plan(
         像素级重叠检测（覆盖扫描件）；None 时跳过。
     blank_configs: {blank_id: 用户显式标记集}，应用到自动插入的空白页
         （覆盖来源默认页码行为；blank_id 见 make_blank_id）。
+    rotation_cache: {原始页索引: detected_rotation}——旋转检测只依赖源页文本内容，
+        不随配置变化；改配置重建时命中缓存跳过重算（性能优化）。打开新 PDF 时由
+        调用方清空。
     """
     # 算法 1：物理顺序
     plan = plan_physical_order(source_pages, config)
@@ -807,11 +830,23 @@ def build_process_plan(
             p.detected_rotation = 0
             p.planned_rotation = plan[i - 1].planned_rotation if i > 0 else 0
             continue
+        src_idx = p.original_index
+        # 性能优化：旋转检测只依赖源页文本内容，改配置不重算（缓存命中直接复用）
+        if (
+            rotation_cache is not None
+            and src_idx is not None
+            and src_idx in rotation_cache
+        ):
+            p.detected_rotation = rotation_cache[src_idx]
+            p.planned_rotation = final_rotation(p)
+            continue
         text = None
         if page_text_data is not None and p.original_index is not None:
             text = page_text_data.get(p.original_index)
         det, _ = plan_rotation(p, text)
         p.planned_rotation = final_rotation(p)
+        if rotation_cache is not None and src_idx is not None:
+            rotation_cache[src_idx] = p.detected_rotation
 
     # 算法 2：页码规划
     processed = plan_page_numbers(

@@ -188,16 +188,16 @@ class TestRotationConsistency:
         return c
 
     def test_text_block_coords_use_total_rotation(self, tmp_path):
-        """带 /Rotate=90 + planned_rotation=0 时，文本块坐标按总旋转 90° 回正。"""
+        """带 /Rotate=90 + 规划旋转 90（总旋转 180°）时，文本块坐标按总旋转回正。"""
         c = self._open_rotated(tmp_path)
         try:
             pp = next(p for p in c.current_plan.pages if not p.is_blank)
             assert pp.source_page_info.source_rotation == 90
-            assert pp.rotation == 0  # 文字水平正向 → 无需额外旋转
-            # 模拟 build_process_plan 传入总旋转（源页 /Rotate + 规划旋转）
-            blocks = c._text_block_calculator(0, 90)
+            assert pp.rotation == 90  # A4 横向（/Rotate=90 显示）→ 两步法必须再转 90°
+            # 模拟 build_process_plan 传入总旋转（源页 /Rotate + 规划旋转 = 90+90=180）
+            blocks = c._text_block_calculator(0, 180)
             assert blocks, "应有文本块"
-            # 内容左上文字 → 显示右下（y 大=底部）
+            # 内容左上文字 → 总旋转 180 后显示右下（y 大=底部）
             max_y = max(b[3] for b in blocks)
             H = pp.output_size_mm[1] * MM_TO_PT
             assert max_y > H * 0.5, f"文本块未回正到底部: max_y={max_y}, H={H}"

@@ -197,6 +197,12 @@ class AppController(QObject):
         self._async_on_success = None
         self._async_on_failed = None
 
+        # 性能优化（重建缓存）：旋转检测只依赖源页文本内容，文本块 bbox 只依赖
+        # (源页, 旋转角)——两者都不随配置变化，改配置重建时命中缓存跳过重算。
+        # PDF 打开时（_clear）清空，不在改配置时清空。
+        self._rotation_cache: dict[int, int] = {}       # src_index -> detected_rotation
+        self._text_block_cache: dict[tuple[int, int], list] = {}  # (src_index, rotation) -> bbox list
+
     # ------------------------------------------------------------------
     # 打开 / 关闭
     # ------------------------------------------------------------------
@@ -213,6 +219,9 @@ class AppController(QObject):
         self.selected_physical_index = 1
         self._selected_pages = []
         self._text_data = {}
+        # 打开新 PDF → 清空重建缓存（旋转/文本块只与源页内容相关，与配置无关）
+        self._rotation_cache = {}
+        self._text_block_cache = {}
 
     def _extract_blank_configs(self) -> None:
         """从 page_configs 中提取空白页配置（str 键）→ _blank_configs。"""
@@ -376,13 +385,18 @@ class AppController(QObject):
         """
         if src_index is None or self.loader._fitz_doc is None:
             return None
+        rotation = (total_rotation or 0) % 360
+        # 性能优化：同一 (源页, 旋转角) → 变换后 bbox 列表恒定，缓存复用
+        cache_key = (src_index, rotation)
+        cached = self._text_block_cache.get(cache_key)
+        if cached is not None:
+            return cached
         page = self.loader._fitz_doc[src_index]
         text_data = self._text_data.get(src_index)
         if text_data is None:
             blocks = self.renderer.extract_text_blocks(page)
         else:
             blocks = text_data.get("blocks", [])
-        rotation = (total_rotation or 0) % 360
         # 内容 bbox 基于"未旋转坐标系"（get_text 输出与 /Rotate 无关）；
         # 而 page.rect 对带 /Rotate 页返回"显示尺寸"（旋转后）。旋转 90/270 时
         # 显示宽=内容高、显示高=内容宽，需还原内容尺寸再变换，否则坐标错乱。
@@ -408,7 +422,9 @@ class AppController(QObject):
                     max(ay0, ay1),
                 )
             out.append((x0, y0, x1, y1))
-        return out or None
+        result = out or None
+        self._text_block_cache[cache_key] = result
+        return result
 
     def _pixel_overlap_checker(
         self, src_index: int, num_rect_pt: tuple[float, float, float, float]
@@ -440,6 +456,7 @@ class AppController(QObject):
             text_block_calculator=self._text_block_calculator,
             pixel_overlap_checker=self._pixel_overlap_checker,
             blank_configs=self._blank_configs,
+            rotation_cache=self._rotation_cache,
         )
         self.current_plan = plan
         if not plan.pages:
