@@ -61,11 +61,12 @@ def _build(blocks_by_idx, src=None, cfg=None):
 # ---------------------------------------------------------------------------
 class TestMoveAdjust:
     def test_move_to_corner_success(self):
-        """右下角重叠 → 向右下移动避开（0.5mm/步，最小边距 3mm）。
+        """右下角重叠 → 在角落四分之一圆内搜索避开（距默认位置最近者优先）。
 
         A4 纵向第 1 页页码默认右下角，num_rect 显示坐标 y[804.5, 820.7]
         （margin_bottom=10mm）。块覆盖页码初始位置 + 移动路径上方（y≤822），
-        移动 margin_bottom 到 ~3.5mm 后 y0>822 → 垂直移出，成功。
+        垂直方向 margin_bottom 减小到 ~4mm 后 y0>822 → 垂直移出，成功。
+        圆搜索只动必要方向（水平 mr 保持 10mm 不动），改动最小、最接近默认。
         """
         blocks = {0: [(500.0, 800.0, 595.0, 822.0)]}
         plan = _build(blocks)
@@ -77,23 +78,29 @@ class TestMoveAdjust:
         assert r.moved, "应发生过移动"
         assert r.fontsize_shrank_levels == 0, "移动即可避开，无需缩小"
         assert r.final_fontsize_pt == 9.0, "字号不应变化"
-        # 边距向角落减小（向右下 = margin_right / margin_bottom 减小）
+        # 至少一个方向边距减小/偏移默认位置（右下角 = margin_right / margin_bottom 变化）
         ml, mr, mb, mt = r.final_margins_mm
-        assert mr < 10.0 and mb < 10.0, f"应向边缘移动，实际 {r.final_margins_mm}"
+        assert mr < 10.0 or mb < 10.0, f"应向角落/内侧偏移，实际 {r.final_margins_mm}"
         assert ml == 10.0 and mt == 10.0
         # 位置确实变了
-        assert pp.number_point != plan.pages[0].number_point or True  # 已重算
         assert pp.effective_style is not None
 
-    def test_move_to_edge_boundary(self):
-        """移动最小边距 3mm 停止：块覆盖到页面边缘（y≤842），
-        移动到底后仍重叠 → 进入缩小阶段（见下一个用例）；此处验证边距下限。"""
-        # 直接调用 _move_to_edge 行为：块右边界 595（页边）→ 水平移动到底 3mm 仍重叠
+    def test_move_inward_success(self):
+        """块覆盖到页面右边缘 → 向内（增大 margin_right）把页码移到块左侧避开。
+
+        圆搜索双向：向角落（减小边距）无法避开（块延伸到页边），向内（增大
+        边距）使页码左移出块 → 成功。这是圆搜索相比旧"只向角落"的新增能力。
+        """
         blocks = {0: [(560.0, 800.0, 595.0, 842.0)]}
         plan = _build(blocks)
         pp = plan.pages[0]
-        assert not pp.overlap_adjusted  # 移不开也缩不出 → 失败保留警告
-        assert len(plan.warnings) == 1
+        assert pp.overlap_adjusted, "应通过向内移动避开"
+        assert plan.warnings == []
+        r = pp.overlap_adjust_result
+        assert r.adjusted and r.moved
+        assert r.fontsize_shrank_levels == 0, "移动即可避开，无需缩小"
+        ml, mr, mb, mt = r.final_margins_mm
+        assert mr > 10.0, f"应向内增大右边距，实际 {r.final_margins_mm}"
 
 
 # ---------------------------------------------------------------------------
@@ -132,9 +139,10 @@ class TestShrinkAdjust:
 # ---------------------------------------------------------------------------
 class TestFailKeepOriginal:
     def test_fail_keeps_original_and_warns(self):
-        """移动 + 缩小（默认 2 级）都不行 → 保留原位置 + 重叠警告。"""
-        # 块覆盖整个右下角区域直到页面边缘 → 移动与缩小都无法完全避开
-        blocks = {0: [(560.0, 800.0, 595.0, 842.0)]}
+        """圆内（角落四分之一圆）全被内容占满 → 移动 + 缩小（默认 2 级）都不行
+        → 保留原位置 + 重叠警告。"""
+        # 块覆盖整个右下角可放页码的区域（含向内/向角落/缩小后的所有位置）
+        blocks = {0: [(500.0, 790.0, 595.0, 842.0)]}
         plan = _build(blocks)
         pp = plan.pages[0]
         assert not pp.overlap_adjusted

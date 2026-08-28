@@ -30,3 +30,7 @@ src/tests/samples/sample_800pages.pdf
 .idea/
 .DS_Store
 Thumbs.db
+
+# 调试/工作脚本（不入库；md2pdf.py 等正式脚本仍跟踪）
+scripts/*
+!scripts/md2pdf.py

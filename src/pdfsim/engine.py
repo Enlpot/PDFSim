@@ -594,6 +594,55 @@ def detect_pixel_overlap(
             b = samples[idx + 2]
             if (r + g + b) // 3 < brightness_threshold:
                 dark += 1
+                # 提前退出：一旦达到阈值即判定重叠，避免整页图片/密集页全遍历
+                if dark >= min_overlap_pixels:
+                    return True
+    return dark >= min_overlap_pixels
+
+
+def _region_pixel_overlap(
+    region: tuple,
+    rect_content_pt: tuple[float, float, float, float],
+    brightness_threshold: int = 230,
+    min_overlap_pixels: int = 30,
+) -> bool:
+    """在预渲染的角落区域图中查询页码矩形子区域的暗像素。
+
+    区域自动调整的**性能关键**：BFS 每候选一次逐像素渲染（get_pixmap ~5-90ms）在
+    大文档失败页上放大成数百秒；改为整页角落区域预渲染一次（一次 get_pixmap），
+    BFS 候选只做子区域像素统计（纯 Python <0.1ms），同时像素已覆盖文本（渲染后的
+    文字即像素），可完全替代文本块+像素两套检测。
+
+    region = (origin_pt, scale, pix)，由 _render_corner_region 返回。
+    rect_content_pt 为**内容坐标系**（无旋转）的页码矩形。
+    """
+    (ox, oy), scale, pix = region
+    n = pix.n
+    samples = pix.samples
+    width = pix.width
+    height = pix.height
+    x0, y0, x1, y1 = rect_content_pt
+    # 页码矩形 → 预渲染图上的像素子区域（含 clip 外扩 2pt 的近似 padding）
+    px0 = int((x0 - 2 - ox) * scale)
+    py0 = int((y0 - 2 - oy) * scale)
+    px1 = int(math.ceil((x1 + 2 - ox) * scale))
+    py1 = int(math.ceil((y1 + 2 - oy) * scale))
+    px0 = max(0, px0)
+    py0 = max(0, py0)
+    px1 = min(width, px1)
+    py1 = min(height, py1)
+    dark = 0
+    for y in range(py0, py1):
+        row = y * width * n
+        for x in range(px0, px1):
+            idx = row + x * n
+            r = samples[idx]
+            g = samples[idx + 1]
+            b = samples[idx + 2]
+            if (r + g + b) // 3 < brightness_threshold:
+                dark += 1
+                if dark >= min_overlap_pixels:
+                    return True
     return dark >= min_overlap_pixels
 
 
@@ -647,8 +696,10 @@ def _rect_overlaps(
             text_hits = detect_overlap(num_rect, blocks)
     if text_hits:
         return True
-    # 无文本块（扫描页）→ 才跑像素检测兜底
-    if not blocks and pixel_overlap_checker is not None and not pp.is_blank:
+    # 像素检测：文本型 PDF 页码区域也执行——覆盖页码与线条/图形（如图纸图签栏
+    # 边框、格线）的重叠。页码区域很小（150dpi 下约 60×30 像素，<1ms），
+    # 文本型 PDF 每页补跑开销可控；空文本块页（扫描件）更必须跑。
+    if pixel_overlap_checker is not None and not pp.is_blank:
         return bool(pixel_overlap_checker(src_idx, num_rect))
     return False
 
@@ -679,10 +730,10 @@ def _detect_hits(
         if blocks:
             text_hits = detect_overlap(num_rect, blocks)
     pixel_hit = False
-    # 无文本块（扫描页）→ 才跑像素检测兜底
+    # 像素检测：文本型 PDF 页码区域也执行——覆盖页码与线条/图形（图签栏边框、
+    # 格线等）重叠。页码区域小，文本型 PDF 每页补跑开销可控（150dpi <1ms）。
     if (
-        not blocks
-        and pixel_overlap_checker is not None
+        pixel_overlap_checker is not None
         and src_idx is not None
         and not pp.is_blank
     ):
@@ -690,47 +741,111 @@ def _detect_hits(
     return text_hits, pixel_hit
 
 
-def _move_to_edge(
+def _margins_attrs(base: PageNumberPos) -> tuple[str, str]:
+    """页码基准位置 → (水平边距属性, 垂直边距属性)。"""
+    h_attr = (
+        "margin_left_mm"
+        if base in (PageNumberPos.BOTTOM_LEFT, PageNumberPos.TOP_LEFT)
+        else "margin_right_mm"
+    )
+    v_attr = (
+        "margin_top_mm"
+        if base in (PageNumberPos.TOP_LEFT, PageNumberPos.TOP_RIGHT)
+        else "margin_bottom_mm"
+    )
+    return h_attr, v_attr
+
+
+def _clone_style(style: PageNumberStyle) -> PageNumberStyle:
+    """复制样式（返回独立副本，就地修改边距不影响原样式）。"""
+    return PageNumberStyle(
+        font=style.font,
+        fontsize_pt=style.fontsize_pt,
+        color=style.color,
+        margin_right_mm=style.margin_right_mm,
+        margin_left_mm=style.margin_left_mm,
+        margin_bottom_mm=style.margin_bottom_mm,
+        margin_top_mm=style.margin_top_mm,
+        vertical_position=style.vertical_position,
+    )
+
+
+def _search_in_corner_arc(
     pp: ProcessedPage,
     style: PageNumberStyle,
     text_width_fn,
     overlap_check_fn,
     min_margin_mm: float,
     step_mm: float,
-) -> bool:
-    """向页面边缘移动页码直到不重叠或碰边界。就地修改 style 的边距。返回是否移动过。"""
+) -> tuple[PageNumberStyle | None, bool]:
+    """在页码所在角落的四分之一圆内搜索能放下页码框且不重叠的位置（不换角）。
+
+    圆心 = 页码所在页面角（边距 0 处）；半径 ≈ 当前边距 + 页码框对角线的一半
+    （用户口径："距右/距下边距 + 页码框对角线的一半"，近似即可，半径下限保证
+    默认位置在内）。
+    候选顺序：距默认位置（当前边距）最近者优先——先按当前边距试，再在圆内
+    向内（增大边距）/向角落（减小边距）小步挪（BFS 距离优先），找到第一个
+    不重叠的候选即返回；圆内找不到返回 (None, False)。
+
+    返回 (candidate_style, moved)；moved 表示是否偏离默认边距位置。
+    """
     base = _base_position(pp, style)
     if base is PageNumberPos.CUSTOM:
-        return False  # 自定义偏移（用户精确定位），不自动调整
-    # 水平方向：LEFT→向左（减小 margin_left），RIGHT→向右（减小 margin_right）
-    if base in (PageNumberPos.BOTTOM_LEFT, PageNumberPos.TOP_LEFT):
-        h_attr = "margin_left_mm"
-    elif base in (PageNumberPos.BOTTOM_RIGHT, PageNumberPos.TOP_RIGHT):
-        h_attr = "margin_right_mm"
-    else:  # 兜底（不应发生）
-        h_attr = None
-    # 垂直方向：BOTTOM→向下（减小 margin_bottom），TOP→向上（减小 margin_top）
-    v_attr = (
-        "margin_bottom_mm"
-        if base in (PageNumberPos.BOTTOM_LEFT, PageNumberPos.BOTTOM_RIGHT)
-        else "margin_top_mm"
-    )
-    moved = False
-    for _ in range(200):  # 安全上限（10mm→3mm 最多 14 步，远小于 200）
-        text_w = text_width_fn(pp.number_text, style.fontsize_pt)
-        if not overlap_check_fn(_compute_num_rect(pp, style, text_w)):
-            break  # 已不重叠
-        stepped = False
-        if h_attr is not None and getattr(style, h_attr) > min_margin_mm + step_mm - 1e-9:
-            setattr(style, h_attr, getattr(style, h_attr) - step_mm)
-            stepped = True
-        if getattr(style, v_attr) > min_margin_mm + step_mm - 1e-9:
-            setattr(style, v_attr, getattr(style, v_attr) - step_mm)
-            stepped = True
-        if not stepped:
-            break  # 两个方向都碰边界
-        moved = True
-    return moved
+        return None, False
+    h_attr, v_attr = _margins_attrs(base)
+    mr0 = getattr(style, h_attr)
+    mb0 = getattr(style, v_attr)
+    if mr0 is None or mb0 is None:
+        return None, False
+    # 页码框对角线（mm 近似）：宽 = 文字宽，高 ≈ 字号（pt→mm）
+    pt_to_mm = 1.0 / MM_TO_PT
+    text_w_mm = text_width_fn(pp.number_text, style.fontsize_pt) * pt_to_mm
+    text_h_mm = style.fontsize_pt * pt_to_mm
+    diag_mm = math.hypot(text_w_mm, text_h_mm)
+    # 圆：圆心 = 页面角；半径 = 边距 + 半对角线（用户口径）
+    R_mm = max(mr0, mb0) + diag_mm / 2.0
+    # 半径下限：保证默认位置（锚点距圆心 = hypot(mr0, mb0)）在圆内，允许小步向内挪
+    default_dist = math.hypot(mr0, mb0)
+    R_eff = max(R_mm, default_dist) + step_mm
+
+    # 性能关键：BFS 阶段字号不变 → 文字宽度恒定，只算一次
+    # （text_width_calculator 走渲染器测宽，逐候选调用会放大成百上千倍开销）
+    text_w = text_width_fn(pp.number_text, style.fontsize_pt)
+
+    import heapq
+
+    heap: list[tuple[float, float, float]] = [(0.0, mr0, mb0)]
+    visited: set[tuple[float, float]] = set()
+    max_iters = 2000  # 候选上限：覆盖整个圆内网格点（0.5mm 步长下约 2100 个）；
+    # 预渲染区域像素查询下每候选 <0.1ms，失败页全遍历也可控（~200ms），
+    # 因此不再用收紧上限换性能，保证 BFS 能到达圆内远端候选。
+    while heap and len(visited) < max_iters:
+        _dist, mr, mb = heapq.heappop(heap)
+        key = (round(mr, 3), round(mb, 3))
+        if key in visited:
+            continue
+        visited.add(key)
+        if mr < min_margin_mm or mb < min_margin_mm:
+            continue
+        # 圆约束：页码框锚点（靠近角落的内角）距圆心 ≤ R_eff
+        if math.hypot(mr, mb) > R_eff + 1e-6:
+            continue
+        cand = _clone_style(style)
+        setattr(cand, h_attr, mr)
+        setattr(cand, v_attr, mb)
+        if not overlap_check_fn(_compute_num_rect(pp, cand, text_w)):
+            moved = abs(mr - mr0) > 1e-9 or abs(mb - mb0) > 1e-9
+            return cand, moved
+        # 扩展邻居（4 邻域小步，距默认位置近者优先；对角由组合可达）
+        for nmr, nmb in (
+            (mr + step_mm, mb),
+            (mr - step_mm, mb),
+            (mr, mb + step_mm),
+            (mr, mb - step_mm),
+        ):
+            nd = math.hypot(nmr - mr0, nmb - mb0)
+            heapq.heappush(heap, (nd, nmr, nmb))
+    return None, False
 
 
 def auto_adjust_overlap(
@@ -760,42 +875,42 @@ def auto_adjust_overlap(
         vertical_position=style.vertical_position,
     )
 
-    # --- 阶段 1：向边缘移动 ---
-    _move_to_edge(pp, cur, text_width_fn, overlap_check_fn, min_margin_mm, step_mm)
-    text_w = text_width_fn(pp.number_text, cur.fontsize_pt)
-    if not overlap_check_fn(_compute_num_rect(pp, cur, text_w)):
-        # 移动后已避开
-        result.moved = True
+    # --- 阶段 1：角落四分之一圆内搜索（不换角，距默认位置最近者优先） ---
+    new_cand, moved = _search_in_corner_arc(
+        pp, cur, text_width_fn, overlap_check_fn, min_margin_mm, step_mm
+    )
+    if new_cand is not None:
+        # 圆内找到不重叠位置
+        result.moved = moved
         result.adjusted = True
-        result.final_fontsize_pt = cur.fontsize_pt
+        result.final_fontsize_pt = new_cand.fontsize_pt
         result.final_margins_mm = (
-            cur.margin_left_mm, cur.margin_right_mm,
-            cur.margin_bottom_mm, cur.margin_top_mm,
+            new_cand.margin_left_mm, new_cand.margin_right_mm,
+            new_cand.margin_bottom_mm, new_cand.margin_top_mm,
         )
-        return cur, result
+        return new_cand, result
 
-    # --- 阶段 2：缩小字号（位置保持移动后的，只改字号） ---
+    # --- 阶段 2：缩小字号（每级 1pt，最多 max_shrink_levels 级，最小 6pt），
+    #             缩小后重新在（更小的）角落圆内搜索位置 ---
     for level in range(1, max_shrink_levels + 1):
         new_size = cur.fontsize_pt - level
         if new_size < AUTO_ADJUST_MIN_FONTSIZE_PT:
             break
-        cand = PageNumberStyle(
-            font=cur.font, fontsize_pt=new_size, color=cur.color,
-            margin_right_mm=cur.margin_right_mm, margin_left_mm=cur.margin_left_mm,
-            margin_bottom_mm=cur.margin_bottom_mm, margin_top_mm=cur.margin_top_mm,
-            vertical_position=cur.vertical_position,
+        base2 = _clone_style(cur)
+        base2.fontsize_pt = new_size
+        c2, _moved2 = _search_in_corner_arc(
+            pp, base2, text_width_fn, overlap_check_fn, min_margin_mm, step_mm
         )
-        text_w = text_width_fn(pp.number_text, new_size)
-        if not overlap_check_fn(_compute_num_rect(pp, cand, text_w)):
-            result.moved = _move_happened(cur, style)
+        if c2 is not None:
+            result.moved = True  # 缩小字号即视为调整发生
             result.adjusted = True
             result.fontsize_shrank_levels = level
             result.final_fontsize_pt = new_size
             result.final_margins_mm = (
-                cand.margin_left_mm, cand.margin_right_mm,
-                cand.margin_bottom_mm, cand.margin_top_mm,
+                c2.margin_left_mm, c2.margin_right_mm,
+                c2.margin_bottom_mm, c2.margin_top_mm,
             )
-            return cand, result
+            return c2, result
 
     # 都不行：调整失败，保留原位置，仍报重叠警告
     result.still_overlapping = True
@@ -810,6 +925,89 @@ def _move_happened(cur: PageNumberStyle, orig: PageNumberStyle) -> bool:
         or cur.margin_bottom_mm != orig.margin_bottom_mm
         or cur.margin_top_mm != orig.margin_top_mm
     )
+
+
+def _render_corner_region(
+    page,
+    corner_pt: tuple[float, float],
+    region_w_pt: float,
+    region_h_pt: float,
+    dpi: int = 150,
+):
+    """渲染页面角落区域一次，返回 (origin_pt, scale, pix) 供 _region_pixel_overlap 查询。
+
+    corner_pt: 页面角的内容坐标（如右下角 (page_w, page_h)）。
+    region_w_pt/h_pt: 从角向页内延伸的区域尺寸（pt），须覆盖圆内所有候选页码框。
+    """
+    import fitz
+
+    cx, cy = corner_pt
+    x0 = cx - region_w_pt
+    y0 = cy - region_h_pt
+    clip = fitz.Rect(x0, y0, cx, cy)
+    pix = page.get_pixmap(clip=clip, dpi=dpi)
+    return (x0, y0), dpi / 72.0, pix
+
+
+def _build_region_overlap_fn(
+    pp: ProcessedPage,
+    style: PageNumberStyle,
+    text_w_pt: float,
+    src_idx: int,
+    page_provider,
+) -> callable | None:
+    """为无旋转页构造基于角落区域预渲染的 overlap 检查函数；失败/旋转页返回 None。
+
+    覆盖圆搜索域（圆心=页面角，半径≈边距+页码框半对角线，与 _search_in_corner_arc
+    一致）及页码框向页内延伸的范围。区域像素查询已含文本像素，完全替代文本块检测 +
+    逐候选像素渲染，是自动调整在文本型大文档上的性能关键。
+    """
+    base = _base_position(pp, style)
+    if base not in (
+        PageNumberPos.BOTTOM_LEFT,
+        PageNumberPos.BOTTOM_RIGHT,
+        PageNumberPos.TOP_LEFT,
+        PageNumberPos.TOP_RIGHT,
+    ):
+        return None
+    page = page_provider(src_idx)
+    if page is None or page.rect.is_empty:
+        return None
+    pt_to_mm = 1.0 / MM_TO_PT
+    text_w_mm = text_w_pt * pt_to_mm
+    text_h_mm = style.fontsize_pt * pt_to_mm
+    diag_mm = math.hypot(text_w_mm, text_h_mm)
+    h_attr, v_attr = _margins_attrs(base)
+    mr0 = getattr(style, h_attr) or 0.0
+    mb0 = getattr(style, v_attr) or 0.0
+    R_mm = max(mr0, mb0) + diag_mm / 2.0
+    R_eff = max(R_mm, math.hypot(mr0, mb0)) + AUTO_ADJUST_STEP_MM
+    R_pt = R_eff * MM_TO_PT
+    num_w = text_w_pt
+    num_h = style.fontsize_pt * 1.8
+    region_w = R_pt + num_w + 4.0
+    region_h = R_pt + num_h + 4.0
+    W, H = page.rect.width, page.rect.height
+    if base in (PageNumberPos.BOTTOM_RIGHT, PageNumberPos.TOP_RIGHT):
+        corner_x = W
+    else:
+        corner_x = 0.0
+    if base in (PageNumberPos.TOP_LEFT, PageNumberPos.TOP_RIGHT):
+        corner_y = 0.0
+    else:
+        corner_y = H
+    region_w = min(region_w, max(W, 1.0))
+    region_h = min(region_h, max(H, 1.0))
+    try:
+        region = _render_corner_region(page, (corner_x, corner_y), region_w, region_h)
+    except Exception:
+        return None
+
+    def check(rect_display) -> bool:
+        # 无旋转页：显示坐标 == 内容坐标，直接映射到预渲染区域
+        return _region_pixel_overlap(region, rect_display)
+
+    return check
 
 
 # ---------------------------------------------------------------------------
@@ -830,6 +1028,7 @@ def build_process_plan(
     blank_configs: dict[str, set[PageMark]] | None = None,
     rotation_cache: dict[int, int] | None = None,
     overlap_cache: dict[tuple, tuple] | None = None,
+    page_provider=None,
 ) -> ProcessPlan:
     """串联算法 1→3→2→4→5，产出完整 ProcessPlan。
 
@@ -967,6 +1166,15 @@ def build_process_plan(
                     pp, src_idx, rect, text_block_calculator, pixel_overlap_checker
                 )
             )
+            # 性能关键：无旋转页用角落区域预渲染的像素检查（一次渲染 + 子区域查询），
+            # 完全替代文本块遍历 + 逐候选像素渲染；旋转页/渲染失败回退逐候选。
+            if page_provider is not None and (pp.rotation + pp.source_page_info.source_rotation) % 360 == 0:
+                text_w1 = _width(pp.number_text, style.fontsize_pt)
+                region_fn = _build_region_overlap_fn(
+                    pp, style, text_w1, src_idx, page_provider
+                )
+                if region_fn is not None:
+                    overlap_fn = region_fn
             new_style, result = auto_adjust_overlap(
                 pp, style, _width, overlap_fn,
                 min_margin_mm=AUTO_ADJUST_MIN_MARGIN_MM,

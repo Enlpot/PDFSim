@@ -59,10 +59,12 @@ class TestConcern1_RotationOverlap:
     """关注点 1：旋转页 + 重叠检测组合。"""
 
     def test_rotated_page_overlap_detected(self):
-        """A4 横向页旋转 90° 后，页码右下角与原内容重叠 → 警告正确触发。
+        """A4 横向页旋转 90° 后，页码右下角与原内容重叠 → 检测到并自动调整避开。
 
         构造：A4 横向 PageInfo + 显示坐标文本块（右下角）+ 无旋转坐标需求
         （旋转页的显示坐标块由 UI 层换算，此处直接模拟换算后的显示块）。
+        圆搜索（角落四分之一圆）在显示坐标系对旋转页同样生效，检测到重叠后
+        自动调整成功，不再有警告。
         """
         page = PageInfo(
             original_index=0,
@@ -84,7 +86,8 @@ class TestConcern1_RotationOverlap:
         pp = plan.pages[0]
         assert pp.rotation == 90
         assert pp.number_position.value == "bottom_right"
-        assert plan.warnings, "旋转页页码与原内容重叠未触发警告"
+        assert pp.overlap_adjusted, "旋转页页码与原内容重叠应被检测并自动调整"
+        assert plan.warnings == [], "调整成功不应再有警告"
 
     def test_rotated_page_no_overlap_ok(self):
         """对照组：旋转页页码位置无内容 → 无警告。"""

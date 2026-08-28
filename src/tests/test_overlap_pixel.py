@@ -154,15 +154,17 @@ class TestMixedOverlap:
         x0, y0, x1, y1 = w.overlap_rect_pt
         assert y0 > 500  # 底部页码区域
 
-    def test_text_page_pixel_skipped(self):
-        """文本页（有文本块但未与页码重叠）→ 像素检测被跳过 → 不报重叠。
+    def test_text_page_pixel_also_runs(self):
+        """文本页（有文本块但未与页码重叠）→ 像素检测**也执行**，命中即报重叠。
 
-        这是优化 3 的核心：文本块存在即覆盖（文本 PDF 不必跑像素渲染），
-        即使该页像素内容恰好与页码重叠也不误报。
+        像素检测不再仅限扫描页：文本型 PDF 页码区域也补跑像素，覆盖页码与
+        线条/图形（如图纸图签栏边框、格线）的重叠。像素命中 → 报重叠警告。
         """
         blocks = [(10.0, 10.0, 50.0, 30.0)]  # 有文本块，未与页码重叠
-        plan = self._build(blocks, True)  # 像素回调即使返回 True 也不触发
-        assert plan.warnings == []
+        plan = self._build(blocks, True)  # 像素命中 → 触发重叠警告
+        assert len(plan.warnings) == 1
+        w = plan.warnings[0]
+        assert w.physical_index == 1
 
     def test_both_miss(self):
         """两者都 miss → 无警告。"""

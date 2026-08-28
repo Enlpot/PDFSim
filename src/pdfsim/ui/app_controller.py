@@ -506,6 +506,15 @@ class AppController(QObject):
             return False
         return engine.detect_pixel_overlap(page, num_rect_pt)
 
+    def _page_provider(self, src_index: int):
+        """源页对象访问器（供引擎角落区域预渲染；无旋转页自动调整性能关键）。"""
+        try:
+            if self.loader._fitz_doc is None:
+                return None
+            return self.loader._fitz_doc[src_index]
+        except Exception:
+            return None
+
     def rebuild_plan(self) -> None:
         """重新规划并通知 UI 刷新。"""
         if self.load_result is None:
@@ -521,6 +530,7 @@ class AppController(QObject):
             blank_configs=self._blank_configs,
             rotation_cache=self._rotation_cache,
             overlap_cache=self._overlap_cache,
+            page_provider=self._page_provider,
         )
         self.current_plan = plan
         if not plan.pages:
