@@ -7,7 +7,7 @@
 3. auto_shrink_levels=0（不缩小）→ 调整失败保留警告
 4. 都不行 → 保留原位置 + 重叠警告（still_overlapping）
 5. 只调重叠的那一页，不影响其他页
-6. 旋转页（planned_rotation != 0）暂不自动调整
+6. 旋转页（planned_rotation != 0）也自动调整（任务 4 修复）
 7. 配置序列化（auto_adjust_overlap / auto_shrink_levels）
 8. 输出写页码用 effective_style（字号生效）
 9. UI："自"角标（缩略图 labels / 书视图绘制冒烟）
@@ -168,20 +168,25 @@ class TestOnlyAdjustedPage:
 
 
 # ---------------------------------------------------------------------------
-# 5. 旋转页暂不自动调整
+# 5. 旋转页自动调整（任务 4 修复：删除跳过检查）
 # ---------------------------------------------------------------------------
-class TestRotationSkip:
-    def test_rotated_page_not_adjusted(self):
-        """planned_rotation=90 → 跳过自动调整，仍报重叠警告。"""
-        # A4 横向（显示尺寸）→ detect 文字方向 → rotation=90
+class TestRotationAdjusted:
+    def test_rotated_page_adjusted(self):
+        """planned_rotation=90（A4 横向→纵向）→ 旋转页也走自动调整（不再跳过）。
+
+        原实现跳过旋转页（总旋转 ≠ 0 → continue）；任务 4 删除跳过检查后，
+        旋转页重叠按正常流程移动/缩小避开。坐标系：_compute_num_rect /
+        _display_anchor / _rect_overlaps / _move_to_edge 全在输出显示坐标系，
+        旋转已由 output_size_mm 与 text_block_calculator 的 total_rotation 处理。
+        """
         page = PageInfo(original_index=0, width_mm=297.0, height_mm=210.0)
-        blocks = {0: [(560.0, 800.0, 590.0, 830.0)]}  # 右下角重叠
+        blocks = {0: [(560.0, 800.0, 570.0, 815.0)]}  # 右下角重叠（可移动避开）
         plan = _build(blocks, src=[page])
         pp = plan.pages[0]
         assert pp.rotation == 90
-        assert not pp.overlap_adjusted, "旋转页第一版不自动调整"
-        assert pp.effective_style is None
-        assert len(plan.warnings) == 1, "旋转页重叠应保留警告"
+        assert pp.overlap_adjusted, "旋转页应自动调整（任务 4 不再跳过）"
+        assert pp.effective_style is not None
+        assert plan.warnings == [], "调整成功不应再有警告"
 
 
 # ---------------------------------------------------------------------------

@@ -140,8 +140,12 @@ class TestMixedOverlap:
         assert w.number_text == "1"
 
     def test_text_block_miss_pixel_hit(self):
-        """文本块 miss + 像素命中（扫描件）→ 报重叠，overlap_rect 用页码 bbox。"""
-        blocks = [(10.0, 10.0, 50.0, 30.0)]  # 不与页码重叠
+        """扫描页（无文本块）+ 像素命中 → 报重叠，overlap_rect 用页码 bbox。
+
+        性能优化：像素检测只在**无文本块**（扫描页）触发；文本页即使像素内容
+        与页码相邻也不跑像素（见 test_text_page_pixel_skipped）。
+        """
+        blocks = None  # 无文本块 = 扫描页 → 像素兜底
         plan = self._build(blocks, True)
         assert len(plan.warnings) == 1
         w = plan.warnings[0]
@@ -149,6 +153,16 @@ class TestMixedOverlap:
         # 像素命中无精确交集 → overlap_rect 即页码 bbox（底部区域）
         x0, y0, x1, y1 = w.overlap_rect_pt
         assert y0 > 500  # 底部页码区域
+
+    def test_text_page_pixel_skipped(self):
+        """文本页（有文本块但未与页码重叠）→ 像素检测被跳过 → 不报重叠。
+
+        这是优化 3 的核心：文本块存在即覆盖（文本 PDF 不必跑像素渲染），
+        即使该页像素内容恰好与页码重叠也不误报。
+        """
+        blocks = [(10.0, 10.0, 50.0, 30.0)]  # 有文本块，未与页码重叠
+        plan = self._build(blocks, True)  # 像素回调即使返回 True 也不触发
+        assert plan.warnings == []
 
     def test_both_miss(self):
         """两者都 miss → 无警告。"""
@@ -166,16 +180,18 @@ class TestMixedOverlap:
 # ---------------------------------------------------------------------------
 class TestRotationConsistency:
     def _open_rotated(self, tmp_path):
-        """构造带 /Rotate=90 的 PDF：显示坐标右下（内容坐标左上）写多行文字。
+        """构造带 /Rotate=90 的 PDF：内容页 A4 纵向，右下角写内容。
 
-        /Rotate=90 时内容坐标→显示坐标映射为 (x_disp, y_disp)=(H-y, W-x)：
-        内容 y 小 → 显示 x 大（右侧）；内容 x 小 → 显示 y 大（底部）。
-        故在内容左上写文字 → 显示右下（页码默认右下区域 → 重叠）。
+        /Rotate=90 显示为 A4 横向。内容 dir=(1,0)（右下文字横向）施加源页旋转
+        90 → 显示 dir=(0,-1)（右面）→ 两步法 must_rotate=True 返回 **270°**
+        （旧实现不修正返回 90°，导致文字倒置——任务 1 修复点）。
+        总旋转 = 90+270 = 360 ≡ 0 → 输出=内容方向（A4 纵向），右下文字与
+        右下页码实质重叠 → 触发警告（坐标修正后正确）。
         """
         doc = pymupdf.open()
         page = doc.new_page(width=595, height=842)
-        for i, yy in enumerate(range(5, 60, 10)):
-            page.insert_text((20, yy), "X" * 8, fontsize=12)
+        # 右下角已有内容（与新增页码区域实质重叠：距右 30pt、距底 30pt）
+        page.insert_text((595 - 30, 842 - 30), "1", fontsize=12, fontname="helv")
         page.set_rotation(90)
         path = str(tmp_path / "rot90.pdf")
         doc.save(path)
@@ -185,19 +201,20 @@ class TestRotationConsistency:
 
         c = AppController()
         c.open_pdf(path, "")
+        c.config.auto_adjust_overlap = False  # 验证"检测→警告"原始语义
+        c.rebuild_plan()
         return c
 
     def test_text_block_coords_use_total_rotation(self, tmp_path):
-        """带 /Rotate=90 + 规划旋转 90（总旋转 180°）时，文本块坐标按总旋转回正。"""
+        """带 /Rotate=90：源页旋转修正后规划旋转 270°（总旋转 360≡0），文本块=内容坐标。"""
         c = self._open_rotated(tmp_path)
         try:
             pp = next(p for p in c.current_plan.pages if not p.is_blank)
             assert pp.source_page_info.source_rotation == 90
-            assert pp.rotation == 90  # A4 横向（/Rotate=90 显示）→ 两步法必须再转 90°
-            # 模拟 build_process_plan 传入总旋转（源页 /Rotate + 规划旋转 = 90+90=180）
-            blocks = c._text_block_calculator(0, 180)
+            assert pp.rotation == 270  # /Rotate=90 + 内容 dir=(1,0) → 需 270° 才可读
+            # 总旋转 = 90+270 = 360 ≡ 0 → 输出=内容方向，文本块坐标=内容坐标（右下）
+            blocks = c._text_block_calculator(0, 0)
             assert blocks, "应有文本块"
-            # 内容左上文字 → 总旋转 180 后显示右下（y 大=底部）
             max_y = max(b[3] for b in blocks)
             H = pp.output_size_mm[1] * MM_TO_PT
             assert max_y > H * 0.5, f"文本块未回正到底部: max_y={max_y}, H={H}"
@@ -205,10 +222,10 @@ class TestRotationConsistency:
             c.close()
 
     def test_rotated_source_overlap_warning(self, tmp_path):
-        """带 /Rotate 页：显示底部有内容 → 页码重叠警告正确触发（坐标回正后）。"""
+        """带 /Rotate 页：内容右下有内容 → 页码重叠警告正确触发（坐标修正后）。"""
         c = self._open_rotated(tmp_path)
         try:
-            assert c.current_plan.warnings, "带 /Rotate 页应触发重叠警告（坐标回正后）"
+            assert c.current_plan.warnings, "带 /Rotate 页应触发重叠警告（坐标修正后）"
         finally:
             c.close()
 

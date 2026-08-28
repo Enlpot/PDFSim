@@ -13,7 +13,7 @@ from PIL import Image
 from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
 
 from pdfsim import engine
-from pdfsim.config import ConfigManager
+from pdfsim.config import ConfigManager, _overlap_fingerprint
 from pdfsim.loader import PDFLoader, PDFLoadError, PDFPasswordError
 from pdfsim.models import (
     DocumentConfig,
@@ -199,9 +199,12 @@ class AppController(QObject):
 
         # 性能优化（重建缓存）：旋转检测只依赖源页文本内容，文本块 bbox 只依赖
         # (源页, 旋转角)——两者都不随配置变化，改配置重建时命中缓存跳过重算。
+        # overlap_cache 依赖 (源页, 页码位置, 字号, 旋转角)，改字号/位置时对应
+        # cache_key 变化自动重算。
         # PDF 打开时（_clear）清空，不在改配置时清空。
         self._rotation_cache: dict[int, int] = {}       # src_index -> detected_rotation
         self._text_block_cache: dict[tuple[int, int], list] = {}  # (src_index, rotation) -> bbox list
+        self._overlap_cache: dict[tuple, tuple] = {}  # (src_idx, base, fontsize, total_rot) -> (hits, pixel, rect)
 
     # ------------------------------------------------------------------
     # 打开 / 关闭
@@ -219,9 +222,10 @@ class AppController(QObject):
         self.selected_physical_index = 1
         self._selected_pages = []
         self._text_data = {}
-        # 打开新 PDF → 清空重建缓存（旋转/文本块只与源页内容相关，与配置无关）
+        # 打开新 PDF → 清空重建缓存（旋转/文本块/重叠只与源页内容相关，与配置无关）
         self._rotation_cache = {}
         self._text_block_cache = {}
+        self._overlap_cache = {}
 
     def _extract_blank_configs(self) -> None:
         """从 page_configs 中提取空白页配置（str 键）→ _blank_configs。"""
@@ -254,7 +258,23 @@ class AppController(QObject):
                 p.marks.add(PageMark.FRONT)
 
         self.selected_physical_index = 1
+        self._prewarm_computed()
         self.rebuild_plan()
+
+    def _prewarm_computed(self) -> None:
+        """打开 PDF 后从配置文件预热计算缓存（rotation_cache / overlap_cache）。
+
+        旋转检测只依赖源页内容（source_file 匹配即有效）；重叠缓存需指纹一致
+        才预热（全局样式/自动调整/起始页码任一变化则失效）。单页覆盖页不预取。
+        """
+        if self.pdf_path is None:
+            return
+        fp = _overlap_fingerprint(self.config)
+        rot_cache, ov_cache = self.config_mgr.load_computed(
+            self.pdf_path, fp, source_pages=self.source_pages
+        )
+        self._rotation_cache.update(rot_cache)
+        self._overlap_cache.update(ov_cache)
 
     # ------------------------------------------------------------------
     # 后台打开（性能优化 P0-1）
@@ -313,6 +333,7 @@ class AppController(QObject):
                 if is_a3(p):
                     p.marks.add(PageMark.FRONT)
             self.selected_physical_index = 1
+            self._prewarm_computed()
             self.rebuild_plan()  # 复用 _text_data 缓存，不重复提取
             cb = self._async_on_success
             self._async_on_success = None
@@ -457,6 +478,7 @@ class AppController(QObject):
             pixel_overlap_checker=self._pixel_overlap_checker,
             blank_configs=self._blank_configs,
             rotation_cache=self._rotation_cache,
+            overlap_cache=self._overlap_cache,
         )
         self.current_plan = plan
         if not plan.pages:
@@ -954,7 +976,12 @@ class AppController(QObject):
         plan_pages = self.current_plan.pages if self.current_plan else None
         page_configs = self.config_mgr.collect_page_configs(
             self.source_pages, plan=plan_pages)
-        self.config_mgr.save_all(self.pdf_path, self.config, page_configs)
+        self.config_mgr.save_all(
+            self.pdf_path, self.config, page_configs,
+            rotation_cache=self._rotation_cache,
+            overlap_cache=self._overlap_cache,
+            overlap_fingerprint=_overlap_fingerprint(self.config),
+        )
 
     # ------------------------------------------------------------------
     # 输出

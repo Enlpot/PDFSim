@@ -272,8 +272,12 @@ def _rotate_dir(dir_tuple: tuple, rotation: int) -> tuple:
     return (x, y)
 
 
-def detect_text_rotation(page_text_data: dict, must_rotate: bool = False) -> int:
-    """文字方向检测（两步法，Bug 修复：旋转方向）。
+def detect_text_rotation(
+    page_text_data: dict,
+    must_rotate: bool = False,
+    source_rotation: int = 0,
+) -> int:
+    """文字方向检测（两步法 + 源页旋转坐标修正）。
 
     步骤 1：选基础旋转——must_rotate 时用 90°（改页面方向），否则 0°。
     步骤 2：对文字方向施加基础旋转，看是否变成正面/右面。
@@ -281,6 +285,9 @@ def detect_text_rotation(page_text_data: dict, must_rotate: bool = False) -> int
 
     must_rotate=True：A3纵向→横向、A4横向→纵向（页面必须改方向）。
     must_rotate=False：A3横向、A4纵向、其他尺寸（方向已对，只修正倒置）。
+    source_rotation：源页自带的 /Rotate 值（0/90/180/270）。get_text("dict") 返回
+      的 dir 向量处于 PDF 内部坐标系（未旋转），需先施加 source_rotation 变换到
+      显示坐标系再做方向判定（否则带 /Rotate 的扫描件检测角错误，90↔270 混淆）。
 
     对应关系（dir 量化到 4 主方向，按字符数加权取主导）：
       物理方向：正面 (1,0)、右面 (0,-1)、对面 (-1,0)、左面 (0,1)。
@@ -305,6 +312,8 @@ def detect_text_rotation(page_text_data: dict, must_rotate: bool = False) -> int
             if d is None:
                 continue
             dx, dy = float(d[0]), float(d[1])
+            # 源页旋转坐标修正：先施加源页 /Rotate，把 dir 变换到显示坐标系
+            dx, dy = _rotate_dir((dx, dy), source_rotation)
             if abs(dx) > abs(dy):
                 quantized = (1.0 if dx > 0 else -1.0, 0.0)
             else:
@@ -338,20 +347,29 @@ def plan_rotation(
     （由 _rotated_size 统一处理）。
     """
     w, h = page.width_mm, page.height_mm
+    src_rot = page.source_rotation  # 源页自带 /Rotate，供 detect_text_rotation 坐标修正
     if _approx(w, A3_WIDTH_MM) and _approx(h, A3_HEIGHT_MM):  # A3 纵向 → 必须改方向
-        r = detect_text_rotation(page_text_data, must_rotate=True) if page_text_data else 90
+        r = detect_text_rotation(
+            page_text_data, must_rotate=True, source_rotation=src_rot
+        ) if page_text_data else 90
         page.detected_rotation = r
         return r, _rotated_size(page, r)
     if _approx(w, A3_HEIGHT_MM) and _approx(h, A3_WIDTH_MM):  # A3 横向 → 方向已对，修倒置
-        r = detect_text_rotation(page_text_data, must_rotate=False) if page_text_data else 0
+        r = detect_text_rotation(
+            page_text_data, must_rotate=False, source_rotation=src_rot
+        ) if page_text_data else 0
         page.detected_rotation = r
         return r, _rotated_size(page, r)
     if _approx(w, A4_HEIGHT_MM) and _approx(h, A4_WIDTH_MM):  # A4 横向 → 必须改方向
-        r = detect_text_rotation(page_text_data, must_rotate=True) if page_text_data else 90
+        r = detect_text_rotation(
+            page_text_data, must_rotate=True, source_rotation=src_rot
+        ) if page_text_data else 90
         page.detected_rotation = r
         return r, _rotated_size(page, r)
     if _approx(w, A4_WIDTH_MM) and _approx(h, A4_HEIGHT_MM):  # A4 纵向 → 方向已对，修倒置
-        r = detect_text_rotation(page_text_data, must_rotate=False) if page_text_data else 0
+        r = detect_text_rotation(
+            page_text_data, must_rotate=False, source_rotation=src_rot
+        ) if page_text_data else 0
         page.detected_rotation = r
         return r, _rotated_size(page, r)
     # 其他尺寸（D3）：不旋转
@@ -542,8 +560,8 @@ def detect_pixel_overlap(
     """像素级重叠检测：渲染页码区域小矩形，统计非白色像素。
 
     参数：
-        page: fitz.Page 对象（无旋转场景下渲染坐标=显示坐标；旋转页通常由
-              文本块检测覆盖，此处作为扫描件补充）。
+        page: fitz.Page 对象（旋转页的 number_rect_pt 为显示坐标，内部自动
+              经 derotation_matrix 变换到未旋转坐标后再渲染 clip）。
         number_rect_pt: 页码区域（显示坐标，pt）。
         dpi: 渲染分辨率（150dpi 下约 30×15pt → 63×31 像素，< 1ms）。
         brightness_threshold: 亮度阈值，低于该值视为"有内容"（纯白 255 不触发，
@@ -556,6 +574,11 @@ def detect_pixel_overlap(
     import fitz  # 延迟导入：engine 顶层保持不依赖 PyMuPDF，仅像素检测路径需要
 
     x0, y0, x1, y1 = number_rect_pt
+    # 旋转页坐标修正：num_rect 是显示坐标，而 get_pixmap 的 clip 使用
+    # 未旋转（内容）坐标系，需先 derotation 回内容坐标，否则 clip 位置错乱。
+    if page.rotation:
+        rc = fitz.Rect(x0, y0, x1, y1) * page.derotation_matrix
+        x0, y0, x1, y1 = rc.x0, rc.y0, rc.x1, rc.y1
     # 扩大 2pt，确保边界覆盖
     clip = fitz.Rect(x0 - 2, y0 - 2, x1 + 2, y1 + 2)
     pix = page.get_pixmap(clip=clip, dpi=dpi)
@@ -605,7 +628,13 @@ def _rect_overlaps(
     text_block_calculator,
     pixel_overlap_checker,
 ) -> bool:
-    """给定页码矩形，判定是否与内容重叠（文本块检测 + 像素检测混合）。"""
+    """给定页码矩形，判定是否与内容重叠（文本块检测 + 像素检测混合）。
+
+    性能优化：像素检测只在**无文本块**（扫描页）时触发——文本块存在但未重叠时，
+    文本块检测已足够，像素检测是给扫描件（整页图片、无文本块）的兜底，文本 PDF
+    每页跑像素渲染是浪费。
+    """
+    blocks = None
     text_hits: list[tuple[float, float, float, float]] = []
     if text_block_calculator is not None:
         # 总旋转（源页自带 /Rotate + 规划旋转），传给回调做坐标变换
@@ -618,7 +647,8 @@ def _rect_overlaps(
             text_hits = detect_overlap(num_rect, blocks)
     if text_hits:
         return True
-    if pixel_overlap_checker is not None and not pp.is_blank:
+    # 无文本块（扫描页）→ 才跑像素检测兜底
+    if not blocks and pixel_overlap_checker is not None and not pp.is_blank:
         return bool(pixel_overlap_checker(src_idx, num_rect))
     return False
 
@@ -632,11 +662,13 @@ def _detect_hits(
 ) -> tuple[list, bool]:
     """文本块 + 像素混合检测，返回 (text_hits, pixel_hit)。
 
-    文本块检测收集所有重叠区域；未命中时像素检测补充（覆盖扫描件）。
-    性能：单遍检测结果供算法 4.5/5 复用，避免每页重复检测。
+    文本块检测收集所有重叠区域；像素检测只在**无文本块**（扫描页）时补充——
+    文本块存在但未重叠时，文本块已覆盖（像素渲染冗余，文本 PDF 每页跑像素是
+    v0.1.0 之后性能回归的主要来源）。性能：单遍检测结果供算法 4.5/5 复用。
     """
     src_idx = pp.source_page_info.original_index
     num_rect = _compute_num_rect(pp, style, text_width_pt)
+    blocks = None
     text_hits: list[tuple[float, float, float, float]] = []
     if text_block_calculator is not None and src_idx is not None:
         total_rotation = (pp.source_page_info.source_rotation + pp.rotation) % 360
@@ -647,8 +679,9 @@ def _detect_hits(
         if blocks:
             text_hits = detect_overlap(num_rect, blocks)
     pixel_hit = False
+    # 无文本块（扫描页）→ 才跑像素检测兜底
     if (
-        not text_hits
+        not blocks
         and pixel_overlap_checker is not None
         and src_idx is not None
         and not pp.is_blank
@@ -796,6 +829,7 @@ def build_process_plan(
     pixel_overlap_checker=None,
     blank_configs: dict[str, set[PageMark]] | None = None,
     rotation_cache: dict[int, int] | None = None,
+    overlap_cache: dict[tuple, tuple] | None = None,
 ) -> ProcessPlan:
     """串联算法 1→3→2→4→5，产出完整 ProcessPlan。
 
@@ -810,6 +844,11 @@ def build_process_plan(
     rotation_cache: {原始页索引: detected_rotation}——旋转检测只依赖源页文本内容，
         不随配置变化；改配置重建时命中缓存跳过重算（性能优化）。打开新 PDF 时由
         调用方清空。
+    overlap_cache: {(原始页索引, 页码基准位置, 字号, 总旋转角, 四边距): (text_hits,
+        pixel_hit, num_rect)}——重叠检测结果缓存；同一 (源页, 位置, 字号, 旋转, 边距)
+        不变则结果不变。改全局字号只有字号变化的页 cache_key 变而重算；改边距/位置
+        也因 cache_key 含边距而自动重算（自动调整只移边距，不含边距会与首遍同 key
+        互相污染）。打开新 PDF 时由调用方清空。
     """
     # 算法 1：物理顺序
     plan = plan_physical_order(source_pages, config)
@@ -870,6 +909,7 @@ def build_process_plan(
 
     # 第一遍重叠检测（单遍，结果缓存供算法 4.5/5 复用）：
     # 未重叠页只需检测一次，避免 800 页大文档每页重复检测的性能放大。
+    # overlap_cache：跨重建复用（同一 (源页, 位置, 字号, 旋转) 结果不变）。
     detect_cache: dict[int, tuple] = {}
     for pp in processed:
         if pp.number_text is None:
@@ -877,10 +917,32 @@ def build_process_plan(
         style = _effective_style(pp, config)
         text_w = _width(pp.number_text, style.fontsize_pt)
         num_rect = _compute_num_rect(pp, style, text_w)
+        src_idx = pp.source_page_info.original_index
+        # cache_key 除 (源页, 基准位置, 字号, 总旋转) 外必须含四边距：自动调整
+        # 只移动边距（base/字号/旋转不变），若不含边距，调整后结果会与首遍同 key
+        # 互相污染（关闭自动调整重建时错误命中"已调整"缓存）。
+        cache_key = (
+            src_idx,
+            _base_position(pp, style),
+            style.fontsize_pt,
+            (pp.source_page_info.source_rotation + pp.rotation) % 360,
+            style.margin_right_mm,
+            style.margin_left_mm,
+            style.margin_bottom_mm,
+            style.margin_top_mm,
+        )
+        if overlap_cache is not None:
+            cached = overlap_cache.get(cache_key)
+            if cached is not None:
+                text_hits, pixel_hit, _ = cached
+                detect_cache[pp.physical_index] = (text_hits, pixel_hit, num_rect)
+                continue
         text_hits, pixel_hit = _detect_hits(
             pp, style, text_w, text_block_calculator, pixel_overlap_checker
         )
         detect_cache[pp.physical_index] = (text_hits, pixel_hit, num_rect)
+        if overlap_cache is not None and src_idx is not None:
+            overlap_cache[cache_key] = (text_hits, pixel_hit, num_rect)
 
     # 算法 4.5：重叠自动调整（只处理重叠页）
     # 规则：向最近的角落移动（0.5mm/步，最小页边距 3mm）→ 仍重叠则缩小字号
@@ -894,9 +956,6 @@ def build_process_plan(
             text_hits, pixel_hit, _num_rect = entry
             if not (text_hits or pixel_hit):
                 continue  # 无重叠，不调整
-            # 旋转页（总旋转 ≠ 0，含源页自带 /Rotate）坐标变换复杂，第一版暂不自动调整
-            if (pp.source_page_info.source_rotation + pp.rotation) % 360 != 0:
-                continue
             if pp.is_blank:  # 空白页无内容可重叠
                 continue
             src_idx = pp.source_page_info.original_index
@@ -930,6 +989,19 @@ def build_process_plan(
                 detect_cache[pp.physical_index] = (
                     th2, ph2, _compute_num_rect(pp, new_style, text_w2)
                 )
+                # 调整后新结果写回 overlap_cache（含边距的 cache_key 与首遍不同，
+                # 不会污染未调整状态；供后续同边距重建复用）
+                if overlap_cache is not None and src_idx is not None:
+                    overlap_cache[(
+                        src_idx,
+                        _base_position(pp, new_style),
+                        new_style.fontsize_pt,
+                        (pp.source_page_info.source_rotation + pp.rotation) % 360,
+                        new_style.margin_right_mm,
+                        new_style.margin_left_mm,
+                        new_style.margin_bottom_mm,
+                        new_style.margin_top_mm,
+                    )] = (th2, ph2, _compute_num_rect(pp, new_style, text_w2))
             else:
                 pp.overlap_adjust_result = result  # 失败：保留原位置，仍报重叠
 

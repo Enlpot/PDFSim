@@ -172,6 +172,75 @@ def _page_from_dict(d: dict) -> PageConfigData:
 
 
 # ---------------------------------------------------------------------------
+# computed 段（计算缓存持久化）辅助
+# ---------------------------------------------------------------------------
+def _overlap_fingerprint(config: DocumentConfig) -> str:
+    """重叠检测结果指纹：影响重叠检测的全局参数拼接。
+
+    全局样式（字号/四边距/垂直位置）+ 自动调整开关与级别 + 起始页码。
+    任一变化 → 指纹变化 → 旧的 overlap 缓存视为失效（不预热）。
+    单页覆盖（style_override / number_pos_override）不影响指纹（load_computed
+    按页过滤覆盖页）；页码文本内容不影响（重叠检测只依赖页码矩形位置与字号）。
+    """
+    s = config.global_style
+    parts = [
+        str(s.fontsize_pt),
+        str(s.margin_right_mm),
+        str(s.margin_left_mm),
+        str(s.margin_bottom_mm),
+        str(s.margin_top_mm),
+        str(s.vertical_position),
+        str(config.auto_adjust_overlap),
+        str(config.auto_shrink_levels),
+        str(config.start_page_number),
+    ]
+    return "|".join(parts)
+
+
+def _overlap_entry_to_dict(key: tuple, value: tuple) -> dict:
+    """overlap_cache 条目 → JSON 字典。
+
+    key = (src_index, PageNumberPos, fontsize_pt, total_rot,
+           margin_right_mm, margin_left_mm, margin_bottom_mm, margin_top_mm)
+    value = (text_hits list, pixel_hit bool, num_rect)
+    """
+    (src_idx, base, fontsize, total_rot,
+     mr, ml, mb, mt) = key
+    text_hits, pixel_hit, num_rect = value
+    return {
+        "key": [src_idx, _POS_TO_STR.get(base, str(base)), fontsize, total_rot,
+                mr, ml, mb, mt],
+        "text_hits": [[float(v) for v in h] for h in text_hits],
+        "pixel_hit": bool(pixel_hit),
+        "num_rect": [float(v) for v in num_rect],
+    }
+
+
+def _overlap_entry_from_dict(d: dict) -> tuple[tuple, tuple] | None:
+    """JSON 字典 → overlap_cache 条目；损坏/不合法返回 None（跳过）。"""
+    k = d.get("key")
+    if not isinstance(k, (list, tuple)) or len(k) != 8:
+        return None
+    base = _STR_TO_POS.get(str(k[1])) if k[1] is not None else None
+    if base is None:
+        return None
+    try:
+        src_idx = int(k[0])
+        fontsize = float(k[2])
+        total_rot = int(k[3])
+        mr, ml, mb, mt = (float(v) for v in k[4:8])
+        text_hits = [tuple(float(v) for v in h) for h in d.get("text_hits", [])]
+        pixel_hit = bool(d.get("pixel_hit", False))
+        num_rect = tuple(float(v) for v in d.get("num_rect", []))
+    except (TypeError, ValueError):
+        return None
+    if len(num_rect) != 4:
+        return None
+    key = (src_idx, base, fontsize, total_rot, mr, ml, mb, mt)
+    return key, (text_hits, pixel_hit, num_rect)
+
+
+# ---------------------------------------------------------------------------
 # ConfigManager
 # ---------------------------------------------------------------------------
 class ConfigManager:
@@ -300,8 +369,17 @@ class ConfigManager:
         pdf_path: str,
         config: DocumentConfig,
         page_configs: dict[int | str, PageConfigData],
+        rotation_cache: dict[int, int] | None = None,
+        overlap_cache: dict[tuple, tuple] | None = None,
+        overlap_fingerprint: str | None = None,
     ) -> None:
-        """整体保存（全局 + 页面级）。"""
+        """整体保存（全局 + 页面级 + 计算缓存 computed 段）。
+
+        rotation_cache: {src_index: detected_rotation}——detected_rotation 只依赖
+            源页文本内容，source_file 匹配即可复用（跨配置有效）。
+        overlap_cache: 见 engine.build_process_plan 的 overlap_cache 参数；需
+            overlap_fingerprint 与保存时一致才可复用（否则打开时不预热）。
+        """
         path = self.config_path_for(pdf_path)
         data = {
             "version": CONFIG_VERSION,
@@ -310,13 +388,88 @@ class ConfigManager:
                 "start_page_number": config.start_page_number,
                 "style": _style_to_dict(config.global_style),
                 "auto_fill_last_page": config.auto_fill_last_page,
+                "auto_number_blank_pages": config.auto_number_blank_pages,
+                "auto_adjust_overlap": config.auto_adjust_overlap,
+                "auto_shrink_levels": config.auto_shrink_levels,
                 "auto_detect_keywords": _keywords_to_dict(config.auto_detect_keywords),
                 "custom_labels": list(config.custom_labels),
             },
             "pages": [_page_to_dict(page_configs[k])
                       for k in sorted(page_configs, key=_config_key_sort)],
         }
+        computed: dict = {}
+        if rotation_cache:
+            computed["rotations"] = {str(k): int(v) for k, v in rotation_cache.items()}
+        if overlap_cache and overlap_fingerprint is not None:
+            computed["overlap"] = {
+                "fingerprint": overlap_fingerprint,
+                "entries": [
+                    _overlap_entry_to_dict(k, v)
+                    for k, v in sorted(
+                        overlap_cache.items(),
+                        key=lambda kv: (kv[0][0], str(kv[0][1]), kv[0][2], kv[0][3]),
+                    )
+                ],
+            }
+        if computed:
+            data["computed"] = computed
         self._atomic_write(path, data)
+
+    def load_computed(
+        self,
+        pdf_path: str,
+        current_fingerprint: str,
+        source_pages: list[PageInfo] | None = None,
+    ) -> tuple[dict[int, int], dict[tuple, tuple]]:
+        """加载 computed 段（计算缓存），用于打开 PDF 时预热。
+
+        - rotations: detected_rotation 只依赖源页内容，source_file 匹配即有效。
+        - overlap: 需 current_fingerprint 与保存时指纹一致才返回；单页覆盖
+          （style_override / number_pos_override）的页不预取——该页实际生效样式
+          与全局指纹不一致，预取可能错误命中。
+        - computed 段缺失 / 损坏不影响 global/pages（返回空缓存）。
+
+        返回 (rotation_cache, overlap_cache)。
+        """
+        data = self._read_raw(pdf_path)
+        if data is None or not self._validate_config(data, pdf_path):
+            return {}, {}
+        comp = data.get("computed")
+        if not isinstance(comp, dict):
+            return {}, {}
+        rotations: dict[int, int] = {}
+        rot_d = comp.get("rotations")
+        if isinstance(rot_d, dict):
+            for k, v in rot_d.items():
+                try:
+                    rotations[int(k)] = int(v)
+                except (TypeError, ValueError):
+                    continue
+        overlap: dict[tuple, tuple] = {}
+        ov_d = comp.get("overlap")
+        if (
+            isinstance(ov_d, dict)
+            and isinstance(ov_d.get("entries"), list)
+            and ov_d.get("fingerprint") == current_fingerprint
+        ):
+            overridden = set()
+            if source_pages:
+                for p in source_pages:
+                    if p.original_index is None:
+                        continue
+                    if p.style_override is not None or p.number_pos_override is not None:
+                        overridden.add(p.original_index)
+            for item in ov_d["entries"]:
+                if not isinstance(item, dict):
+                    continue
+                kv = _overlap_entry_from_dict(item)
+                if kv is None:
+                    continue
+                key, value = kv
+                if key[0] in overridden:
+                    continue  # 有单页覆盖的页不预取
+                overlap[key] = value
+        return rotations, overlap
 
     # -- 应用页面配置到 PageInfo --------------------------------------------
     def apply_page_configs(
