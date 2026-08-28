@@ -21,6 +21,15 @@ def cfg_mgr():
     return ConfigManager()
 
 
+@pytest.fixture(autouse=True)
+def _isolate_global_default(tmp_path, monkeypatch):
+    """隔离应用级全局默认配置路径，避免测试读到真实用户配置。"""
+    gd = tmp_path / "PDFSim" / "global_default.json"
+    monkeypatch.setattr(
+        ConfigManager, "global_default_path", staticmethod(lambda: str(gd)))
+    return gd
+
+
 @pytest.fixture
 def fake_pdf(tmp_path):
     """模拟一个 PDF 文件路径（不实际创建 PDF，仅用于配置文件路径推导）。"""
@@ -79,6 +88,72 @@ class TestSaveLoadRoundtrip:
     def test_load_nonexistent_returns_default(self, cfg_mgr, fake_pdf):
         loaded = cfg_mgr.load_config(fake_pdf)
         assert loaded.start_page_number == 1
+
+
+class TestGlobalDefault:
+    """应用级全局默认配置（全局设置"保存为默认"）。"""
+
+    def test_save_load_roundtrip(self, cfg_mgr):
+        cfg = DocumentConfig(start_page_number=7)
+        cfg.global_style = PageNumberStyle(
+            font="SimSun", fontsize_pt=11.0, color=(255, 0, 0),
+            margin_right_mm=15.0)
+        cfg.auto_adjust_overlap = False
+        cfg.auto_shrink_levels = 1
+        cfg.auto_fill_last_page = True
+        cfg.auto_number_blank_pages = True
+        cfg.auto_detect_keywords[PageMark.COVER].append("titlepage")
+        cfg.output_suffix = "（默认）"
+        cfg_mgr.save_global_default(cfg)
+        loaded = cfg_mgr.load_global_default()
+        assert loaded is not None
+        assert loaded.start_page_number == 7
+        assert loaded.global_style.font == "SimSun"
+        assert loaded.global_style.fontsize_pt == 11.0
+        assert loaded.global_style.color == (255, 0, 0)
+        assert loaded.global_style.margin_right_mm == 15.0
+        assert loaded.auto_adjust_overlap is False
+        assert loaded.auto_shrink_levels == 1
+        assert loaded.auto_fill_last_page is True
+        assert loaded.auto_number_blank_pages is True
+        assert "titlepage" in loaded.auto_detect_keywords[PageMark.COVER]
+        assert loaded.output_suffix == "（默认）"
+
+    def test_load_missing_returns_none(self, cfg_mgr):
+        assert cfg_mgr.load_global_default() is None
+
+    def test_load_corrupted_returns_none(self, cfg_mgr):
+        path = cfg_mgr.global_default_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("{bad json")
+        assert cfg_mgr.load_global_default() is None
+
+    def test_load_config_falls_back_to_global_default(self, cfg_mgr, fake_pdf):
+        """新 PDF（无专属配置）→ 自动应用全局默认。"""
+        cfg = DocumentConfig(start_page_number=9)
+        cfg.global_style = PageNumberStyle(font="SimHei", fontsize_pt=10.0)
+        cfg_mgr.save_global_default(cfg)
+        loaded = cfg_mgr.load_config(fake_pdf)
+        assert loaded.start_page_number == 9
+        assert loaded.global_style.font == "SimHei"
+        assert loaded.global_style.fontsize_pt == 10.0
+
+    def test_load_config_prefers_pdf_specific(self, cfg_mgr, fake_pdf):
+        """已有专属配置的 PDF 继续用专属，不受全局默认影响。"""
+        cfg_mgr.save_global_default(DocumentConfig(start_page_number=9))
+        spec = DocumentConfig(start_page_number=5)
+        spec.global_style = PageNumberStyle(font="KaiTi")
+        cfg_mgr.save_config(fake_pdf, spec)
+        loaded = cfg_mgr.load_config(fake_pdf)
+        assert loaded.start_page_number == 5
+        assert loaded.global_style.font == "KaiTi"
+
+    def test_load_config_hardcoded_when_no_global_default(self, cfg_mgr, fake_pdf):
+        """无专属也无全局默认 → 硬编码默认。"""
+        loaded = cfg_mgr.load_config(fake_pdf)
+        assert loaded.start_page_number == 1
+        assert loaded.global_style.font == "Times New Roman"
 
 
 class TestVersionAndSourceValidation:

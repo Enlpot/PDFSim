@@ -18,13 +18,14 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
-from pdfsim.models import PageMark, PageNumberStyle
+from pdfsim.models import DocumentConfig, PageMark, PageNumberStyle
 
 _FONTS = ["Times New Roman", "SimSun", "SimHei", "KaiTi", "Microsoft YaHei", "Arial"]
 
@@ -142,6 +143,13 @@ class GlobalSettingsDialog(QDialog):
         )
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
+        # 应用级全局默认：保存后新 PDF 打开自动应用（独立按钮，不影响当前文档）
+        self._save_default_btn = buttons.addButton(
+            "保存为默认", QDialogButtonBox.ButtonRole.ActionRole)
+        self._save_default_btn.setToolTip(
+            "将当前设置保存为应用级默认配置。\n"
+            "之后打开没有专属配置的新 PDF 会自动应用；当前文档不受影响。")
+        self._save_default_btn.clicked.connect(self._on_save_default)
         root.addWidget(buttons)
 
     # ------------------------------------------------------------------
@@ -211,6 +219,45 @@ class GlobalSettingsDialog(QDialog):
         if color.isValid():
             self._color_rgb = (color.red(), color.green(), color.blue())
             self._set_color_button(self._color_rgb)
+
+    def _current_config(self) -> DocumentConfig:
+        """按当前 UI 值构造 DocumentConfig（不触碰 controller 状态）。"""
+        cfg = DocumentConfig()
+        cfg.start_page_number = self._start_spin.value()
+        cfg.auto_number_blank_pages = self._blank_num_check.isChecked()
+        cfg.auto_adjust_overlap = self._auto_adj_check.isChecked()
+        cfg.auto_shrink_levels = self._shrink_combo.currentIndex()
+        cfg.global_style = self._current_style()
+        cfg.auto_detect_keywords = {
+            PageMark.COVER: self._split_kw(self._kw_cover.text()),
+            PageMark.SIGNATURE: self._split_kw(self._kw_sign.text()),
+            PageMark.FRONT: self._split_kw(self._kw_toc.text()),
+            "body": self._split_kw(self._kw_body.text()),
+        }
+        cfg.auto_fill_last_page = self._fill_check.isChecked()
+        cfg.output_suffix = self._suffix_edit.text().strip()
+        return cfg
+
+    def _on_save_default(self) -> None:
+        """保存为默认：写应用级全局默认配置，不影响当前文档。"""
+        from pdfsim.config import ConfigManager
+
+        cfg_mgr = (
+            self.controller.config_mgr
+            if self.controller is not None
+            else ConfigManager()
+        )
+        try:
+            cfg_mgr.save_global_default(self._current_config())
+        except OSError as e:  # pragma: no cover
+            QMessageBox.warning(self, "保存失败", f"写入默认配置失败：{e}")
+            return
+        QMessageBox.information(
+            self,
+            "已保存默认配置",
+            "已将当前设置保存为应用级默认配置。\n"
+            "之后打开没有专属配置的新 PDF 会自动应用。",
+        )
 
     def accept(self) -> None:
         """确定：应用到 controller（触发重建 + 防抖保存）。"""

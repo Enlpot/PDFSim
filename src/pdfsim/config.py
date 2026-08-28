@@ -25,6 +25,9 @@ from pdfsim.models import (
 
 CONFIG_VERSION = 2  # v2（规则变更）：空白页可配置（blank_id 键）；旧 NO_COUNT 用户标记迁移为 NO_NUMBER
 CONFIG_EXT = ".pagerconfig.json"
+# 应用级全局默认配置（全局设置"保存为默认"），与具体 PDF 无关
+GLOBAL_DEFAULT_DIRNAME = "PDFSim"
+GLOBAL_DEFAULT_FILENAME = "global_default.json"
 
 
 def _config_key_sort(key: int | str) -> tuple:
@@ -287,13 +290,24 @@ class ConfigManager:
 
     # -- 全局配置 ----------------------------------------------------------
     def load_config(self, pdf_path: str) -> DocumentConfig:
-        """加载全局配置；无配置 / 损坏 / 版本或源文件不匹配时返回默认配置。"""
+        """加载全局配置。
+
+        回退链：PDF 专属配置 → 应用级全局默认（global_default.json）→ 硬编码默认。
+        无配置 / 损坏 / 版本或源文件不匹配时，优先回退应用级全局默认，使
+        "保存为默认" 对打开新 PDF 自动生效；全局默认也不存在时才用硬编码默认。
+        """
         data = self._read_raw(pdf_path)
         if data is None or not self._validate_config(data, pdf_path):
-            return DocumentConfig()
+            return self.load_global_default() or DocumentConfig()
         cfg = DocumentConfig()
         cfg.version = CONFIG_VERSION
-        g = data.get("global", {}) or {}
+        self._apply_global_dict(cfg, data.get("global", {}) or {})
+        cfg.config_filename = self.config_path_for(pdf_path)
+        return cfg
+
+    @staticmethod
+    def _apply_global_dict(cfg: DocumentConfig, g: dict) -> None:
+        """把配置文件的 global 段应用到 DocumentConfig（缺失字段保持默认）。"""
         if isinstance(g.get("start_page_number"), int):
             cfg.start_page_number = g["start_page_number"]
         if isinstance(g.get("style"), dict):
@@ -310,8 +324,55 @@ class ConfigManager:
             cfg.auto_detect_keywords = _keywords_from_dict(g["auto_detect_keywords"])
         if isinstance(g.get("custom_labels"), list):
             cfg.custom_labels = [str(x) for x in g["custom_labels"]]
-        cfg.config_filename = self.config_path_for(pdf_path)
+        if isinstance(g.get("output_suffix"), str):
+            cfg.output_suffix = g["output_suffix"]
+
+    # -- 应用级全局默认配置（全局设置"保存为默认"） ------------------------
+    @staticmethod
+    def global_default_path() -> str:
+        """应用级全局默认配置路径：优先 %APPDATA%/PDFSim/global_default.json。"""
+        base = os.environ.get("APPDATA") or os.path.expanduser("~")
+        return os.path.join(base, GLOBAL_DEFAULT_DIRNAME, GLOBAL_DEFAULT_FILENAME)
+
+    def load_global_default(self, path: str | None = None) -> DocumentConfig | None:
+        """加载应用级全局默认配置；文件不存在 / 损坏 / 非对象返回 None。"""
+        p = path or self.global_default_path()
+        if not os.path.isfile(p):
+            return None
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        cfg = DocumentConfig()
+        cfg.config_filename = p
+        self._apply_global_dict(cfg, data.get("global", {}) or {})
         return cfg
+
+    def save_global_default(
+        self, config: DocumentConfig, path: str | None = None
+    ) -> str:
+        """保存应用级全局默认配置（仅 global 段），返回写入路径。"""
+        p = path or self.global_default_path()
+        os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
+        data = {
+            "version": CONFIG_VERSION,
+            "global": {
+                "start_page_number": config.start_page_number,
+                "style": _style_to_dict(config.global_style),
+                "auto_fill_last_page": config.auto_fill_last_page,
+                "auto_number_blank_pages": config.auto_number_blank_pages,
+                "auto_adjust_overlap": config.auto_adjust_overlap,
+                "auto_shrink_levels": config.auto_shrink_levels,
+                "auto_detect_keywords": _keywords_to_dict(config.auto_detect_keywords),
+                "custom_labels": list(config.custom_labels),
+                "output_suffix": config.output_suffix,
+            },
+        }
+        self._atomic_write(p, data)
+        return p
 
     def save_config(self, pdf_path: str, config: DocumentConfig) -> None:
         """保存全局配置（保留已有页面级配置）。"""
@@ -328,6 +389,7 @@ class ConfigManager:
             "auto_shrink_levels": config.auto_shrink_levels,
             "auto_detect_keywords": _keywords_to_dict(config.auto_detect_keywords),
             "custom_labels": list(config.custom_labels),
+            "output_suffix": config.output_suffix,
         }
         self._atomic_write(path, data)
 
@@ -393,6 +455,7 @@ class ConfigManager:
                 "auto_shrink_levels": config.auto_shrink_levels,
                 "auto_detect_keywords": _keywords_to_dict(config.auto_detect_keywords),
                 "custom_labels": list(config.custom_labels),
+                "output_suffix": config.output_suffix,
             },
             "pages": [_page_to_dict(page_configs[k])
                       for k in sorted(page_configs, key=_config_key_sort)],
