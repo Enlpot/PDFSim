@@ -302,43 +302,44 @@ class TestDetectTextRotation:
 
 
 class TestPlanRotation:
-    def test_a4_landscape_text_horizontal_rot90(self):
-        # A4 横向 + 正面文字 → 两步法必须旋转到纵向 90°，尺寸交换
+    def test_a4_landscape_text_horizontal_rot270(self):
+        # A4 横向 + 正面文字 → 两步法 must_rotate=True → 270°，尺寸交换
+        #（旋转方向 Bug 修复：/Rotate=90 渲染后 (1,0)→(0,1) 左面不可读，须 270 才显示右面可读）
         p = a4_landscape(0)
         r, size = plan_rotation(p, text_data((1.0, 0.0)))
-        assert r == 90
+        assert r == 270
         assert size == (A4_WIDTH_MM, A4_HEIGHT_MM)
 
-    def test_a4_landscape_text_up_rot90(self):
+    def test_a4_landscape_text_up_rot270(self):
         p = a4_landscape(0)
         r, size = plan_rotation(p, text_data((0.0, 1.0)))
-        assert r == 90
-        assert size == (A4_WIDTH_MM, A4_HEIGHT_MM)  # 90° 交换宽高
+        assert r == 270
+        assert size == (A4_WIDTH_MM, A4_HEIGHT_MM)  # 270° 交换宽高
 
-    def test_a4_landscape_text_down_rot270(self):
+    def test_a4_landscape_text_down_rot90(self):
         p = a4_landscape(0)
         r, size = plan_rotation(p, text_data((0.0, -1.0)))
-        assert r == 270
+        assert r == 90
         assert size == (A4_WIDTH_MM, A4_HEIGHT_MM)
 
-    def test_a4_landscape_text_reversed_rot270(self):
-        # A4 横向 + 对面文字 → 两步法 must_rotate=True → 270°，尺寸交换
+    def test_a4_landscape_text_reversed_rot90(self):
+        # A4 横向 + 对面文字 → 两步法 must_rotate=True → 90°，尺寸交换
         p = a4_landscape(0)
         r, size = plan_rotation(p, text_data((-1.0, 0.0)))
-        assert r == 270
+        assert r == 90
         assert size == (A4_WIDTH_MM, A4_HEIGHT_MM)
 
-    def test_a3_portrait_needs_rotation(self):
+    def test_a3_portrait_text_up_rot270(self):
         p = a3(0)
         r, size = plan_rotation(p, text_data((0.0, 1.0)))
-        assert r == 90
+        assert r == 270
         assert size == (A3_HEIGHT_MM, A3_WIDTH_MM)
 
-    def test_a3_portrait_text_reversed_rot270(self):
+    def test_a3_portrait_text_reversed_rot90(self):
         p = a3(0)
         r, size = plan_rotation(p, text_data((-1.0, 0.0)))
-        assert r == 270
-        assert size == (A3_HEIGHT_MM, A3_WIDTH_MM)  # 270° 交换宽高
+        assert r == 90
+        assert size == (A3_HEIGHT_MM, A3_WIDTH_MM)  # 90° 交换宽高
 
     def test_a4_portrait_no_rotation(self):
         p = a4(0)
@@ -586,9 +587,9 @@ class TestBuildProcessPlan:
         # 页码
         texts = [p.number_text for p in plan.pages]
         assert texts == ["1", "2", "3", "4"]
-        # 旋转页（A4 横向 + 正面文字 → 两步法必须旋转到纵向 90°）
+        # 旋转页（A4 横向 + 正面文字 → 两步法 → 270°，显示右面可读）
         rot_page = plan.pages[3]
-        assert rot_page.rotation == 90
+        assert rot_page.rotation == 270
         assert rot_page.output_size_mm == (A4_WIDTH_MM, A4_HEIGHT_MM)
         # 每页都有坐标
         for p in plan.pages:

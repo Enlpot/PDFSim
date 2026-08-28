@@ -78,16 +78,16 @@ class TestDetectTextRotationTwoStep:
     """
 
     def test_must_rotate_front(self):
-        assert detect_text_rotation(text_data((1.0, 0.0)), must_rotate=True) == 90
+        assert detect_text_rotation(text_data((1.0, 0.0)), must_rotate=True) == 270
 
     def test_must_rotate_left(self):
-        assert detect_text_rotation(text_data((0.0, 1.0)), must_rotate=True) == 90
+        assert detect_text_rotation(text_data((0.0, 1.0)), must_rotate=True) == 270
 
     def test_must_rotate_opposite(self):
-        assert detect_text_rotation(text_data((-1.0, 0.0)), must_rotate=True) == 270
+        assert detect_text_rotation(text_data((-1.0, 0.0)), must_rotate=True) == 90
 
     def test_must_rotate_right(self):
-        assert detect_text_rotation(text_data((0.0, -1.0)), must_rotate=True) == 270
+        assert detect_text_rotation(text_data((0.0, -1.0)), must_rotate=True) == 90
 
     def test_no_must_rotate_front(self):
         assert detect_text_rotation(text_data((1.0, 0.0)), must_rotate=False) == 0
@@ -119,34 +119,34 @@ class TestDetectTextRotationTwoStep:
                 {"type": 0, "lines": [{"dir": (0.0, 1.0), "spans": [{"text": "b" * 5}]}]},
             ]
         }
-        assert detect_text_rotation(data, must_rotate=True) == 90
+        assert detect_text_rotation(data, must_rotate=True) == 270
         assert detect_text_rotation(data, must_rotate=False) == 0
 
 
 class TestPlanRotationAllPages:
     """plan_rotation 对所有页面类型调用 detect_text_rotation。"""
 
-    def test_a3_portrait_front_rot90(self):
+    def test_a3_portrait_front_rot270(self):
         p = a3(0)
         r, size = plan_rotation(p, text_data((1.0, 0.0)))
-        assert r == 90
-        assert size == (A3_HEIGHT_MM, A3_WIDTH_MM)  # 90° 交换宽高
+        assert r == 270
+        assert size == (A3_HEIGHT_MM, A3_WIDTH_MM)  # 270° 交换宽高
 
-    def test_a3_portrait_left_rot90(self):
+    def test_a3_portrait_left_rot270(self):
         p = a3(0)
         r, _ = plan_rotation(p, text_data((0.0, 1.0)))
-        assert r == 90
+        assert r == 270
 
-    def test_a3_portrait_opposite_rot270(self):
+    def test_a3_portrait_opposite_rot90(self):
         p = a3(0)
         r, size = plan_rotation(p, text_data((-1.0, 0.0)))
-        assert r == 270
+        assert r == 90
         assert size == (A3_HEIGHT_MM, A3_WIDTH_MM)
 
-    def test_a3_portrait_right_rot270(self):
+    def test_a3_portrait_right_rot90(self):
         p = a3(0)
         r, _ = plan_rotation(p, text_data((0.0, -1.0)))
-        assert r == 270
+        assert r == 90
 
     def test_a3_landscape_front_0(self):
         p = a3_landscape(0)
@@ -182,16 +182,16 @@ class TestPlanRotationAllPages:
         r, _ = plan_rotation(p, text_data((1.0, 0.0)))
         assert r == 0
 
-    def test_a4_landscape_front_90(self):
+    def test_a4_landscape_front_270(self):
         p = a4_landscape(0)
         r, size = plan_rotation(p, text_data((1.0, 0.0)))
-        assert r == 90
+        assert r == 270
         assert size == (A4_WIDTH_MM, A4_HEIGHT_MM)  # 交换
 
-    def test_a4_landscape_reversed_270(self):
+    def test_a4_landscape_reversed_90(self):
         p = a4_landscape(0)
         r, _ = plan_rotation(p, text_data((-1.0, 0.0)))
-        assert r == 270
+        assert r == 90
 
     def test_no_text_defaults(self):
         # 无文字：需改方向 → 90；方向已对 → 0；None → 0
@@ -257,7 +257,7 @@ class TestRotationCache:
         cache: dict[int, int] = {}
         plan = build_process_plan(src, cfg(), page_text_data=texts,
                                   rotation_cache=cache)
-        assert cache[0] == 90            # 检测结果 90
+        assert cache[0] == 270           # 检测结果 90
         assert plan.pages[0].rotation == 0  # 用户覆盖 NONE → 0
 
     def test_no_cache_param_fallback(self, monkeypatch):

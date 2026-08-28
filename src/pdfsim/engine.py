@@ -258,17 +258,27 @@ def plan_page_numbers(
 # 算法 3：页面旋转
 # ---------------------------------------------------------------------------
 def _rotate_dir(dir_tuple: tuple, rotation: int) -> tuple:
-    """对方向向量施加顺时针旋转。"""
+    """对方向向量施加页面旋转后的实际显示方向变换。
+
+    依据 PDF 规范 + 实测渲染验证（/Rotate=90 渲染后横排文字 (1,0)
+    变为从上到下竖排 (0,1)，/Rotate=270 变为 (0,-1)）：
+      r=0:   (x, y)
+      r=90:  (-y, x)      ← 90° 与 270° 的映射与旋转方向 Bug 修复前相反
+      r=180: (-x, -y)
+      r=270: (y, -x)
+    用于 detect_text_rotation 的源页 /Rotate 坐标修正与基础旋转方向预测，
+    必须与实际渲染方向一致，否则可读性判定差 180°。
+    """
     x, y = dir_tuple
     r = rotation % 360
     if r == 0:
         return (x, y)
     if r == 90:
-        return (y, -x)
+        return (-y, x)
     if r == 180:
         return (-x, -y)
     if r == 270:
-        return (-y, x)
+        return (y, -x)
     return (x, y)
 
 
