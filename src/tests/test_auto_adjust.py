@@ -222,7 +222,9 @@ class TestOutputEffectiveStyle:
 
         doc = pymupdf.open()
         doc.new_page(width=595, height=842)
-        bytes_pdf = doc.tobytes()
+        # 方案 A：_draw_page_numbers 参数从 bytes 改为临时文件路径
+        tmp_in = str(tmp_path / "in.pdf")
+        doc.save(tmp_in)
         doc.close()
 
         style = PageNumberStyle(fontsize_pt=7.0)  # 自动调整后缩小到 7pt
@@ -242,7 +244,7 @@ class TestOutputEffectiveStyle:
         plan = ProcessPlan(pages=[pp], start_page_number=1, warnings=[], output_path="")
         out_path = str(tmp_path / "out.pdf")
         out = PDFOutput()
-        out._draw_page_numbers(bytes_pdf, plan, DocumentConfig(), out_path, out.font_path if hasattr(out, "font_path") else r"C:\Windows\Fonts\times.ttf")
+        out._draw_page_numbers(tmp_in, plan, DocumentConfig(), out_path, out.font_path if hasattr(out, "font_path") else r"C:\Windows\Fonts\times.ttf")
         with pymupdf.open(out_path) as d:
             spans = []
             for b in d[0].get_text("dict").get("blocks", []):

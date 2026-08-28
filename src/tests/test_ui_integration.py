@@ -132,8 +132,12 @@ def test_empty_password_cancel(make_window, samples_dir, monkeypatch):
     assert w.isVisible()
 
 
-def test_output_exists_dialog(make_window, samples_dir, tmp_path, monkeypatch):
-    """输出已存在 → 弹"已存在，已跳过"警告（不覆盖）。"""
+def test_output_exists_dialog(make_window, samples_dir, tmp_path, monkeypatch, qtbot):
+    """输出已存在 → 弹"已存在，已跳过"警告（不覆盖）。
+
+    方案 C 后 on_output 为异步（后台线程 + output_result_ready 信号），
+    需等待信号确认结果弹窗路径。
+    """
     w, c = _open(make_window, samples_dir, "sample_a4_portrait.pdf")
     c.config.output_dir = str(tmp_path)
     shown = {}
@@ -144,9 +148,11 @@ def test_output_exists_dialog(make_window, samples_dir, tmp_path, monkeypatch):
     # 首次输出成功
     r1 = c.output()
     assert r1.success
-    # 通过 UI 输出（第二次 → 已存在）
-    w.on_output()
+    # 通过 UI 输出（第二次 → 已存在；异步等待结果）
+    with qtbot.waitSignal(c.output_result_ready, timeout=30000):
+        w.on_output()
     assert shown.get("exists")
+    assert w.act_output.isEnabled()  # 输出按钮已恢复
 
 
 def test_global_settings_apply(make_window, samples_dir, qtbot):

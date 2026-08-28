@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QMainWindow,
     QMessageBox,
+    QProgressDialog,
     QSplitter,
     QToolBar,
 )
@@ -303,14 +304,42 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def on_output(self) -> None:
-        """调用输出模块并处理结果弹窗（已存在 / 成功 / 失败）。"""
+        """启动后台输出（方案 C：大 PDF 不阻塞 UI），显示进度对话框。"""
         if self.controller.current_plan is None:
             return
-        self._busy(True)
-        try:
-            result = self.controller.output()
-        finally:
-            self._busy(False)
+        # 连接进度/结果信号（只连一次）
+        if not getattr(self, "_output_signals_connected", False):
+            self.controller.output_progress.connect(self._on_output_progress)
+            self.controller.output_result_ready.connect(self._on_output_result)
+            self._output_signals_connected = True
+
+        started = self.controller.output_async()
+        if not started:
+            return  # 已在运行 / 无法启动
+
+        # 输出过程中禁用输出按钮（防重复点击），完成后恢复
+        self.act_output.setEnabled(False)
+        self._output_progress_dlg = QProgressDialog(
+            "正在输出…", "取消", 0, 100, self)
+        self._output_progress_dlg.setWindowTitle("输出")
+        self._output_progress_dlg.setWindowModality(Qt.WindowModality.WindowModal)
+        self._output_progress_dlg.setMinimumDuration(0)
+        self._output_progress_dlg.setValue(0)
+        self._output_progress_dlg.canceled.connect(self._on_output_cancel)
+        self._output_progress_dlg.show()
+
+    def _on_output_progress(self, pct: int, msg: str) -> None:
+        dlg = getattr(self, "_output_progress_dlg", None)
+        if dlg is not None:
+            dlg.setLabelText(msg)
+            dlg.setValue(pct)
+
+    def _on_output_result(self, result) -> None:
+        dlg = getattr(self, "_output_progress_dlg", None)
+        if dlg is not None:
+            dlg.close()
+            self._output_progress_dlg = None
+        self.act_output.setEnabled(True)  # 恢复输出按钮
         if result is None:
             return
         if result.success:
@@ -324,6 +353,10 @@ class MainWindow(QMainWindow):
             dialogs.show_output_exists(self, result.output_path)
         else:
             dialogs.show_output_failed(self, result.message)
+
+    def _on_output_cancel(self) -> None:
+        # 输出不可中断（PDF 写入中），仅关闭进度框，线程完成后忽略结果
+        pass
 
     def on_report(self) -> None:
         """打开处理报告对话框。"""

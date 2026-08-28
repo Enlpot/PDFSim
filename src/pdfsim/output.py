@@ -2,8 +2,11 @@
 """PDF 输出模块（依据《技术方案.md》5.1 协作流程 + Stage2 提示语 5.5）。
 
 流程：
-  1. 结构阶段（pikepdf）：按 ProcessPlan 重组页面（复制原页 / 插空白 / 旋转），存内存字节流；
-  2. 内容阶段（PyMuPDF）：用 insert_text 以内容流文字绘制页码（坐标来自算法 4），字体嵌入；
+  1. 结构阶段（pikepdf）：按 ProcessPlan 重组页面（复制原页 / 插空白 / 旋转），
+     保存到**临时文件**（大 PDF 修复方案 A：BytesIO 整包序列化导致内存峰值
+     ~400-600MB，改为磁盘中转，两库不再同时持有完整 PDF）；
+  2. 内容阶段（PyMuPDF）：用 insert_text 以内容流文字绘制页码（坐标来自算法 4），
+     字体嵌入；out.save(garbage=4, deflate=True) 压缩 + GC 减小体积；
   3. 校验：输出后重开确认页数一致；原文件 SHA-256 前后对比（未修改）。
 
 输出规则：输出到原文件夹，文件名 `原文件名（打印装订）.pdf`；已存在则跳过不覆盖。
@@ -11,8 +14,8 @@
 from __future__ import annotations
 
 import hashlib
-import io
 import os
+import tempfile
 from dataclasses import dataclass, field
 
 import pikepdf
@@ -57,6 +60,7 @@ class PDFOutput:
         plan: ProcessPlan,
         config: DocumentConfig,
         font_path: str | None = None,
+        progress_cb: callable = None,  # noqa: F821  # 可选进度回调 (pct, step_text)
     ) -> OutputResult:
         font_path = font_path or self.font_path
         out_path = self._output_path(source_pdf_path, config)
@@ -69,13 +73,28 @@ class PDFOutput:
             )
 
         src_hash_before = self._sha256(source_pdf_path)
+        out_dir = config.output_dir or os.path.dirname(os.path.abspath(source_pdf_path))
+        tmp_path: str | None = None
 
-        # 1. 结构阶段（pikepdf）
-        bytes_pdf = self._build_structure(source_pdf_path, plan)
+        if progress_cb:
+            progress_cb(10, "构建页面结构…")
+        try:
+            # 1. 结构阶段（pikepdf）→ 临时文件（不再整包进内存）
+            tmp_path = self._build_structure(source_pdf_path, plan, out_dir)
+            if progress_cb:
+                progress_cb(50, "绘制页码…")
+            # 2. 内容阶段（PyMuPDF 绘制页码）
+            self._draw_page_numbers(tmp_path, plan, config, out_path, font_path)
+        finally:
+            # 无论成功/异常都清理临时文件（异常时 _draw_page_numbers 内已关闭 out）
+            if tmp_path is not None and os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
 
-        # 2. 内容阶段（PyMuPDF 绘制页码）
-        self._draw_page_numbers(bytes_pdf, plan, config, out_path, font_path)
-
+        if progress_cb:
+            progress_cb(90, "校验输出…")
         # 3. 校验
         page_count = self._verify_output(out_path, len(plan.pages))
         src_hash_after = self._sha256(source_pdf_path)
@@ -98,7 +117,15 @@ class PDFOutput:
         )
 
     # -- 结构阶段 -----------------------------------------------------------
-    def _build_structure(self, source_pdf_path: str, plan: ProcessPlan) -> bytes:
+    def _build_structure(
+        self, source_pdf_path: str, plan: ProcessPlan, out_dir: str
+    ) -> str:
+        """结构阶段：pikepdf 重组页面，保存到临时文件（不再用 BytesIO）。
+
+        返回临时文件路径，调用方（output() 的 finally）负责清理。
+        临时文件放 out_dir（输出目录）内，确保同盘避免跨盘拷贝。
+        大 PDF 修复方案 A：dst.save 直接落盘，避免整个 PDF 序列化到内存。
+        """
         src = pikepdf.open(source_pdf_path)
         dst = pikepdf.Pdf.new()
         try:
@@ -119,9 +146,10 @@ class PDFOutput:
                     continue
                 dst.pages[pp.physical_index - 1].rotate(pp.rotation, relative=True)
 
-            buf = io.BytesIO()
-            dst.save(buf)
-            return buf.getvalue()
+            fd, tmp_path = tempfile.mkstemp(suffix=".pdf", dir=out_dir or ".")
+            os.close(fd)
+            dst.save(tmp_path)
+            return tmp_path
         finally:
             dst.close()
             src.close()
@@ -137,13 +165,13 @@ class PDFOutput:
 
     def _draw_page_numbers(
         self,
-        bytes_pdf: bytes,
+        tmp_path: str,
         plan: ProcessPlan,
         config: DocumentConfig,
         out_path: str,
         font_path: str,
     ) -> None:
-        out = pymupdf.open(stream=bytes_pdf, filetype="pdf")
+        out = pymupdf.open(tmp_path)  # 从文件打开（不再 open(stream=bytes)）
         try:
             for pp in plan.pages:
                 if pp.number_text is None or pp.number_point is None:
@@ -187,7 +215,8 @@ class PDFOutput:
                         fontsize=style.fontsize_pt,
                         color=color,
                     )
-            out.save(out_path)
+            # 大 PDF 修复方案 A：压缩 + GC 减小输出体积（不改变页面内容）
+            out.save(out_path, garbage=4, deflate=True)
         finally:
             out.close()
 

@@ -28,7 +28,7 @@ from pdfsim.models import (
     is_a3,
     MM_TO_PT,
 )
-from pdfsim.output import PDFOutput
+from pdfsim.output import OutputResult, PDFOutput
 from pdfsim.renderer import PDFRenderer
 from pdfsim.ui.styles import BOOK_VIEW_DPI, CONFIG_SAVE_DEBOUNCE_MS, THUMBNAIL_DPI
 
@@ -146,6 +146,41 @@ class _LoadWorker(QObject):
             self.finished.emit()
 
 
+class _OutputWorker(QObject):
+    """后台输出工作线程（大 PDF 修复方案 C）。
+
+    在线程内调用 PDFOutput.output()，避免主线程冻结。
+    进度信号驱动主线程进度条更新；结果/错误信号回传主线程。
+    """
+
+    progress = Signal(int, str)   # (percent, step_text)
+    done = Signal(object)         # OutputResult
+    failed = Signal(str)          # error message
+    finished = Signal()           # run() 结束（成功或失败）
+
+    def __init__(self, pdf_path: str, plan, config: DocumentConfig) -> None:
+        super().__init__()
+        self._pdf_path = pdf_path
+        self._plan = plan
+        self._config = config
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            output_module = PDFOutput()
+            result = output_module.output(
+                self._pdf_path,
+                self._plan,
+                self._config,
+                progress_cb=lambda pct, msg: self.progress.emit(pct, msg),
+            )
+            self.done.emit(result)
+        except Exception as e:  # pragma: no cover
+            self.failed.emit(str(e))
+        finally:
+            self.finished.emit()
+
+
 class AppController(QObject):
     """应用控制器：协调核心模块 + 管理应用状态。
 
@@ -162,6 +197,8 @@ class AppController(QObject):
     load_progress = Signal(int, str)   # 后台打开进度 (percent, step)
     load_finished = Signal()           # 后台打开完成（成功或失败）
     load_failed = Signal(str, str)     # 后台打开失败 (error_kind, detail)
+    output_progress = Signal(int, str)     # 后台输出进度 (percent, step_text)
+    output_result_ready = Signal(object)   # 后台输出完成 → OutputResult
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -205,6 +242,9 @@ class AppController(QObject):
         self._rotation_cache: dict[int, int] = {}       # src_index -> detected_rotation
         self._text_block_cache: dict[tuple[int, int], list] = {}  # (src_index, rotation) -> bbox list
         self._overlap_cache: dict[tuple, tuple] = {}  # (src_idx, base, fontsize, total_rot) -> (hits, pixel, rect)
+        # 后台输出线程（方案 C：大 PDF 输出不阻塞主线程）
+        self._output_thread: QThread | None = None
+        self._output_worker: _OutputWorker | None = None
 
     # ------------------------------------------------------------------
     # 打开 / 关闭
@@ -354,6 +394,8 @@ class AppController(QObject):
 
     def close(self) -> None:
         self._cancel_async_load()
+        # 等待后台输出线程结束（避免关闭窗口时线程仍在写 PDF）
+        self._cleanup_output_thread()
         self.loader.close()
 
     # ------------------------------------------------------------------
@@ -987,10 +1029,58 @@ class AppController(QObject):
     # 输出
     # ------------------------------------------------------------------
     def output(self):
-        """调用输出模块；返回 OutputResult（无文档时返回 None）。"""
+        """调用输出模块（同步）；返回 OutputResult（无文档时返回 None）。
+
+        保留给测试/无 UI 场景；UI 使用 output_async 后台输出。
+        """
         if self.current_plan is None or self.pdf_path is None:
             return None
         return self.output_module.output(self.pdf_path, self.current_plan, self.config)
+
+    def output_async(self) -> bool:
+        """启动后台输出（方案 C）。返回 True=已启动，False=无法启动/已在运行。"""
+        if self.current_plan is None or self.pdf_path is None:
+            return False
+        if self._output_thread is not None:
+            return False  # 已在运行，防重复
+
+        self._output_thread = QThread(self)
+        self._output_worker = _OutputWorker(
+            self.pdf_path, self.current_plan, self.config
+        )
+        self._output_worker.moveToThread(self._output_thread)
+        self._output_thread.started.connect(self._output_worker.run)
+        self._output_worker.progress.connect(self._on_output_progress)
+        self._output_worker.done.connect(self._on_output_done)
+        self._output_worker.failed.connect(self._on_output_failed)
+        self._output_worker.finished.connect(self._output_thread.quit)
+        self._output_worker.finished.connect(self._output_worker.deleteLater)
+        self._output_thread.finished.connect(self._output_thread.deleteLater)
+        self._output_thread.start()
+        return True
+
+    def _on_output_progress(self, pct: int, msg: str) -> None:
+        self.output_progress.emit(pct, msg)
+
+    def _on_output_done(self, result) -> None:
+        self.output_result_ready.emit(result)
+        self._cleanup_output_thread()
+
+    def _on_output_failed(self, msg: str) -> None:
+        self.output_result_ready.emit(
+            OutputResult(success=False, output_path="", message=msg)
+        )
+        self._cleanup_output_thread()
+
+    def _cleanup_output_thread(self) -> None:
+        if self._output_thread is not None:
+            try:
+                self._output_thread.quit()
+                self._output_thread.wait(1000)
+            except Exception:  # pragma: no cover
+                pass
+            self._output_thread = None
+            self._output_worker = None
 
     def expected_output_path(self) -> str:
         """预计输出路径（供 UI 显示）。"""
