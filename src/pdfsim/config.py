@@ -276,14 +276,16 @@ class ConfigManager:
         """校验 version 与 source_file。不匹配返回 False（调用方回退默认）。
 
         v2 起支持空白页配置；v1（旧配置）接受并迁移（NO_COUNT → NO_NUMBER）。
+        source_file 只按文件名（basename）匹配：允许把 PDF + 配置一起
+        复制/移动到其他文件夹后继续生效（配置跟随 PDF 走，不绑定文件夹路径）。
         """
         version = data.get("version")
         if version not in (1, 2):
             return False
         src = data.get("source_file")
         if src is not None:
-            norm_pdf = os.path.normcase(os.path.abspath(pdf_path))
-            norm_src = os.path.normcase(os.path.abspath(str(src)))
+            norm_pdf = os.path.basename(os.path.normcase(os.path.abspath(pdf_path)))
+            norm_src = os.path.basename(os.path.normcase(os.path.abspath(str(src))))
             if norm_src != norm_pdf:
                 return False
         return True

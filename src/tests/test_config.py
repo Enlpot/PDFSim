@@ -173,6 +173,29 @@ class TestVersionAndSourceValidation:
         loaded = cfg_mgr.load_config(fake_pdf)
         assert loaded.start_page_number == 1  # 回退默认
 
+    def test_source_file_same_basename_new_folder_ok(self, cfg_mgr, fake_pdf):
+        """PDF + 配置一起复制到新文件夹：source_file 只按文件名匹配，配置仍生效。"""
+        path = cfg_mgr.config_path_for(fake_pdf)
+        old_path = os.path.join("D:\\@test", os.path.basename(fake_pdf))
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(
+                {"version": 2, "source_file": old_path,
+                 "global": {"start_page_number": 5}}, f)
+        loaded = cfg_mgr.load_config(fake_pdf)
+        assert loaded.start_page_number == 5
+
+    def test_page_configs_same_basename_new_folder_ok(self, cfg_mgr, fake_pdf):
+        """复制后页面级配置同样生效（_validate_config 一致受益）。"""
+        path = cfg_mgr.config_path_for(fake_pdf)
+        old_path = os.path.join("D:\\@test", os.path.basename(fake_pdf))
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(
+                {"version": 2, "source_file": old_path,
+                 "pages": [{"original_index": 0, "marks": ["signature"]}]}, f)
+        loaded = cfg_mgr.load_page_configs(fake_pdf)
+        assert 0 in loaded
+        assert PageMark.SIGNATURE in loaded[0].marks
+
     def test_corrupted_json_ignored(self, cfg_mgr, fake_pdf):
         path = cfg_mgr.config_path_for(fake_pdf)
         with open(path, "w", encoding="utf-8") as f:
